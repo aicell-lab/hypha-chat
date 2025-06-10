@@ -55,6 +55,9 @@ jobs:
       - name: Build with Next.js
         run: yarn export
 
+      - name: Add CNAME file
+        run: echo "navigator.bioimage.io" > ./out/CNAME
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

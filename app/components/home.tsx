@@ -29,13 +29,18 @@ import { WebLLMApi } from "../client/webllm";
 import { ModelClient, useChatStore } from "../store";
 import { MLCLLMContext, WebLLMContext } from "../context";
 import { MlcLLMApi } from "../client/mlcllm";
+import { useHyphaStore } from "../store/hypha";
 
 export function Loading(props: { noLogo?: boolean }) {
   return (
     <div className={styles["loading-content"] + " no-dark"}>
       {!props.noLogo && (
-        <div className={styles["loading-content-logo"] + " no-dark mlc-icon"}>
-          <MlcIcon />
+        <div className={styles["loading-content-logo"] + " no-dark"}>
+          <img
+            src="/logo.png"
+            alt="Research Navigator"
+            style={{ width: "100%", height: "100%", objectFit: "contain" }}
+          />
         </div>
       )}
       <LoadingIcon />
@@ -239,17 +244,17 @@ const useWebLLM = () => {
     }
   }, []);
 
-  if (webllm?.webllm.type === "serviceWorker") {
-    setInterval(() => {
-      if (webllm) {
-        // 10s per heartbeat, dead after 30 seconds of inactivity
-        setWebllmAlive(
-          !!webllm.webllm.engine &&
-            (webllm.webllm.engine as ServiceWorkerMLCEngine).missedHeatbeat < 3,
-        );
-      }
-    }, 10_000);
-  }
+  // if (webllm?.webllm.type === "serviceWorker") {
+  //   setInterval(() => {
+  //     if (webllm) {
+  //       // 10s per heartbeat, dead after 30 seconds of inactivity
+  //       setWebllmAlive(
+  //         !!webllm.webllm.engine &&
+  //           (webllm.webllm.engine as ServiceWorkerMLCEngine).missedHeatbeat < 3,
+  //       );
+  //     }
+  //   }, 10_000);
+  // }
   return { webllm, isWebllmActive };
 };
 
@@ -335,6 +340,14 @@ const useModels = (mlcllm: MlcLLMApi | undefined) => {
   }, [config.modelClientType, mlcllm]);
 };
 
+const useInitializeHypha = () => {
+  const { initialize } = useHyphaStore();
+
+  useEffect(() => {
+    initialize();
+  }, [initialize]);
+};
+
 export function Home() {
   const hasHydrated = useHasHydrated();
   const { webllm, isWebllmActive } = useWebLLM();
@@ -346,6 +359,7 @@ export function Home() {
   useStopStreamingMessages();
   useModels(mlcllm);
   useLogLevel(webllm);
+  useInitializeHypha();
 
   if (!hasHydrated || !webllm || !isWebllmActive) {
     return <Loading />;

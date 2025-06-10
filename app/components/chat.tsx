@@ -62,6 +62,7 @@ import { Prompt, usePromptStore } from "../store/prompt";
 import Locale from "../locales";
 
 import { IconButton } from "./button";
+import LoginButton from "./login-button";
 import styles from "./chat.module.scss";
 
 import {
@@ -91,7 +92,8 @@ import { Template, useTemplateStore } from "../store/template";
 import Image from "next/image";
 import { MLCLLMContext, WebLLMContext } from "../context";
 import { ChatImage } from "../typing";
-import ModelSelect from "./model-select";
+import AgentSelect from "./model-select";
+import { useHyphaStore } from "../store/hypha";
 
 export function ScrollDownToast(prop: { show: boolean; onclick: () => void }) {
   return (
@@ -488,12 +490,24 @@ export function ChatActions(props: {
 }) {
   const config = useAppConfig();
   const chatStore = useChatStore();
+  const { resources } = useHyphaStore();
 
   // switch model
   const currentModel = config.modelConfig.model;
   const models = config.models;
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [showUploadImage, setShowUploadImage] = useState(false);
+
+  // Get display name for current model/agent
+  const getCurrentDisplayName = () => {
+    if (config.modelConfig.selectedAgent) {
+      return config.modelConfig.selectedAgent.name;
+    }
+
+    // If it's a regular model, find its display name
+    const model = models.find((m) => m.name === currentModel);
+    return model?.display_name || currentModel;
+  };
 
   useEffect(() => {
     const show = isVisionModel(currentModel);
@@ -551,19 +565,24 @@ export function ChatActions(props: {
       )}
       <ChatAction
         onClick={() => setShowModelSelector(true)}
-        text={currentModel}
+        text={getCurrentDisplayName()}
         icon={<RobotIcon />}
         fullWidth
       />
       {showModelSelector && (
-        <ModelSelect
+        <AgentSelect
           onClose={() => {
             setShowModelSelector(false);
           }}
-          availableModels={models.map((m) => m.name)}
-          onSelectModel={(modelName) => {
-            config.selectModel(modelName as Model);
-            showToast(modelName);
+          selectedAgent={config.modelConfig.selectedAgent?.id}
+          onSelectAgent={(agentId: string) => {
+            // Find the agent name from resources
+            const agent = resources.find((r) => r.id === agentId);
+            const agentName = agent?.manifest.name || agentId;
+
+            config.selectAgent(agentId, agentName);
+            showToast(`Selected: ${agentName}`);
+            setShowModelSelector(false);
           }}
         />
       )}
@@ -1136,6 +1155,9 @@ function _Chat() {
               />
             </div>
           )}
+          <div className="window-action-button">
+            <LoginButton />
+          </div>
         </div>
       </div>
 

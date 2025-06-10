@@ -47,6 +47,12 @@ export type ModelConfig = {
 
   // MLC LLM configs
   mlc_endpoint: string;
+
+  // Selected agent info
+  selectedAgent?: {
+    id: string;
+    name: string;
+  };
 };
 
 export type ConfigType = {
@@ -98,6 +104,7 @@ const DEFAULT_MODEL_CONFIG: ModelConfig = {
   ...DEFAULT_MODELS.find((m) => m.name === DEFAULT_MODEL)!.recommended_config,
 
   mlc_endpoint: "",
+  selectedAgent: undefined,
 };
 
 export const DEFAULT_CONFIG: ConfigType = {
@@ -185,6 +192,21 @@ export const useAppConfig = createPersistStore(
           ...state.modelConfig,
           model,
           ...(config?.recommended_config || {}),
+          selectedAgent: undefined, // Clear agent when selecting a model
+        },
+      }));
+    },
+
+    selectAgent(agentId: string, agentName: string) {
+      set((state) => ({
+        ...state,
+        modelConfig: {
+          ...state.modelConfig,
+          model: agentId as Model, // Set the agent ID as the model
+          selectedAgent: {
+            id: agentId,
+            name: agentName,
+          },
         },
       }));
     },
@@ -219,9 +241,9 @@ export const useAppConfig = createPersistStore(
   }),
   {
     name: StoreKey.Config,
-    version: 0.64,
+    version: 0.65,
     migrate: (persistedState, version) => {
-      if (version < 0.64) {
+      if (version < 0.65) {
         return {
           ...DEFAULT_CONFIG,
           ...(persistedState as any),

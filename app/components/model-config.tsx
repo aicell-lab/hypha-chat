@@ -15,7 +15,7 @@ import { InputRange } from "./input-range";
 import { List, ListItem, Modal, Select, showToast } from "./ui-lib";
 import React, { useState } from "react";
 import { IconButton } from "./button";
-import ModelSelect from "./model-select";
+import AgentSelect from "./model-select";
 
 export function ModelConfigList() {
   const config = useAppConfig();
@@ -264,13 +264,12 @@ export function ModelConfigList() {
         </>
       )}
       {showModelSelector && (
-        <ModelSelect
+        <AgentSelect
           onClose={() => {
             setShowModelSelector(false);
           }}
-          availableModels={models.map((m) => m.name)}
-          onSelectModel={(modelName) => {
-            config.selectModel(modelName as Model);
+          onSelectAgent={(agentId: string) => {
+            config.selectModel(agentId as Model);
           }}
         />
       )}

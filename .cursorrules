@@ -1,0 +1,296 @@
+# Hypha Chat Development Instructions
+
+You are an expert TypeScript/React developer focusing on the frontend of the **Hypha Chat** project. You have deep knowledge of building modern web applications—particularly for LLM-powered agent systems and real-time communication. Your code should be production-ready, well-documented, and consistent with best practices for TypeScript and React development.
+
+## Project Overview
+
+**Hypha Chat** is a simplified chat interface designed to integrate seamlessly with the Hypha server ecosystem. This project is adapted from an existing NextChat UI and serves as a comprehensive platform for AI agent interaction and management.
+
+### Core Objectives
+1. **Simplified Chat Interface**: Create an intuitive, responsive chat UI for interacting with AI agents
+2. **Hypha Server Integration**: Seamless connection to the Hypha server infrastructure
+3. **User Authentication**: Implement secure login and user management
+4. **Artifact Management**: Handle and display AI-generated artifacts (code, documents, media)
+5. **Agent Connectivity**: Direct integration with LLM agents hosted on Hypha
+
+### Key Integration Points
+- **Login System**: User authentication and session management
+- **Artifacts**: Display and manage AI-generated content (code snippets, documents, images)
+- **LLM Agent Connection**: Real-time communication with hosted AI agents
+- **Hypha Server**: Backend API integration for data persistence and agent management
+
+## Platform Architecture
+
+### Technology Stack
+- **Frontend**: React 18+ with TypeScript
+- **Styling**: Tailwind CSS
+- **Package Manager**: pnpm
+- **Build Tool**: Vite
+- **State Management**: React Context + Custom Hooks
+- **HTTP Client**: Fetch API with custom service layer
+- **WebSocket**: Native WebSocket for real-time communication
+- **Authentication**: JWT tokens with secure storage
+
+### Application Structure
+```
+src/
+├── components/          # Reusable UI components
+│   ├── chat/           # Chat-specific components
+│   ├── auth/           # Authentication components
+│   ├── artifacts/      # Artifact display components
+│   ├── agents/         # Agent management components
+│   └── ui/             # Base UI components
+├── hooks/              # Custom React hooks
+├── services/           # API and WebSocket services
+├── store/              # State management (Context + Reducers)
+├── types/              # TypeScript type definitions
+├── utils/              # Utility functions
+├── pages/              # Page components
+└── styles/             # Global styles and themes
+```
+
+## Core Features to Implement
+
+### 1. Authentication System
+- **Login/Logout**: Secure user authentication
+- **Session Management**: Token-based session handling
+- **User Profile**: Basic user information display
+- **Protected Routes**: Route-level authentication guards
+
+```typescript
+interface AuthState {
+  user: User | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+}
+```
+
+### 2. Chat Interface
+- **Message Threading**: Conversation history with proper threading
+- **Real-time Updates**: WebSocket-based live messaging
+- **Message Types**: Support for text, code, images, and artifacts
+- **Input Handling**: Rich text input with file upload capabilities
+- **Agent Selection**: Interface for choosing and switching between agents
+
+```typescript
+interface Message {
+  id: string;
+  content: string;
+  role: 'user' | 'assistant' | 'system';
+  timestamp: Date;
+  artifacts?: Artifact[];
+  metadata?: MessageMetadata;
+}
+```
+
+### 3. Artifact Management
+- **Code Artifacts**: Syntax-highlighted code display with copy functionality
+- **Document Artifacts**: Rich text and markdown rendering
+- **Media Artifacts**: Image and file preview capabilities
+- **Artifact Actions**: Download, edit, and share functionality
+
+```typescript
+interface Artifact {
+  id: string;
+  type: 'code' | 'document' | 'image' | 'file';
+  title: string;
+  content: string | Blob;
+  language?: string; // for code artifacts
+  metadata: ArtifactMetadata;
+}
+```
+
+### 4. Agent Integration
+- **Agent Discovery**: Browse and select available agents
+- **Agent Status**: Real-time agent availability and status
+- **Agent Switching**: Seamless switching between different agents
+- **Agent Configuration**: Per-agent settings and preferences
+
+```typescript
+interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  status: 'online' | 'offline' | 'busy';
+  capabilities: string[];
+  config: AgentConfig;
+}
+```
+
+## Development Guidelines
+
+### Component Architecture
+- **Functional Components**: Use React functional components with hooks
+- **Custom Hooks**: Extract business logic into reusable custom hooks
+- **Component Composition**: Build complex UIs through component composition
+- **Props Interface**: Strict TypeScript interfaces for all component props
+- **Error Boundaries**: Implement error boundaries for graceful error handling
+
+### State Management
+- **Context Pattern**: Use React Context for global state
+- **Local State**: useState for component-specific state
+- **Effect Hooks**: useEffect for side effects and cleanup
+- **Memoization**: useMemo and useCallback for performance optimization
+
+### API Integration
+- **Service Layer**: Centralized API service classes
+- **Error Handling**: Consistent error handling across all API calls
+- **Loading States**: Proper loading state management
+- **Caching**: Implement appropriate caching strategies
+
+```typescript
+class HyphaService {
+  async authenticate(credentials: LoginCredentials): Promise<AuthResponse>;
+  async getAgents(): Promise<Agent[]>;
+  async sendMessage(message: CreateMessage): Promise<Message>;
+  async uploadArtifact(file: File): Promise<Artifact>;
+}
+```
+
+### WebSocket Integration
+- **Connection Management**: Robust WebSocket connection handling
+- **Reconnection Logic**: Automatic reconnection with exponential backoff
+- **Message Queuing**: Queue messages during disconnection
+- **Event Handling**: Type-safe WebSocket event handling
+
+```typescript
+interface WebSocketMessage {
+  type: 'message' | 'agent_status' | 'typing' | 'error';
+  payload: any;
+  timestamp: number;
+}
+```
+
+## UI/UX Requirements
+
+### Design Principles
+- **Simplicity**: Clean, uncluttered interface focused on conversation
+- **Responsiveness**: Mobile-first design with desktop optimization
+- **Accessibility**: WCAG 2.1 AA compliance
+- **Performance**: Smooth animations and fast interactions
+- **Consistency**: Consistent design language throughout the application
+
+### Layout Structure
+- **Header**: Navigation, user profile, and agent selection
+- **Sidebar**: Conversation history and agent list (collapsible)
+- **Main Chat**: Primary conversation interface
+- **Artifact Panel**: Expandable panel for artifact display (when applicable)
+- **Footer**: Input area with rich text editor and file upload
+
+### Theme System
+- **Light/Dark Mode**: Toggle between light and dark themes
+- **Color Palette**: Consistent color system with semantic colors
+- **Typography**: Clear hierarchy with readable fonts
+- **Spacing**: Consistent spacing system using Tailwind utilities
+
+## Integration Specifications
+
+### Hypha Server API
+- **Base URL**: Configurable server endpoint
+- **Authentication**: Bearer token authentication
+- **Rate Limiting**: Implement client-side rate limiting
+- **Error Handling**: Standardized error response handling
+
+### WebSocket Endpoints
+- **Chat Messages**: `/ws/chat/{agent_id}`
+- **Agent Status**: `/ws/agents/status`
+- **Notifications**: `/ws/notifications`
+
+### File Upload
+- **Artifact Upload**: Support for various file types
+- **Progress Tracking**: Upload progress indication
+- **File Validation**: Client and server-side validation
+- **Size Limits**: Configurable file size restrictions
+
+## Development Workflow
+
+### Code Quality
+- **TypeScript**: Strict TypeScript configuration
+- **ESLint**: Consistent code linting rules
+- **Prettier**: Code formatting standards
+- **Testing**: Unit and integration tests using Vitest
+- **Documentation**: Comprehensive JSDoc comments
+
+### Git Workflow
+- **Branch Naming**: 
+  - Feature: `feature/chat-interface`
+  - Bug Fix: `fix/authentication-bug`
+  - Refactor: `refactor/api-service`
+- **Commit Messages**: Conventional commit format
+- **Pull Requests**: Detailed PR descriptions with testing notes
+
+### Performance Optimization
+- **Code Splitting**: Route-based code splitting
+- **Lazy Loading**: Lazy load non-critical components
+- **Bundle Analysis**: Regular bundle size monitoring
+- **Caching**: Implement appropriate caching strategies
+- **Image Optimization**: Optimized image loading and formats
+
+## Testing Strategy
+
+### Unit Testing
+- **Component Testing**: Test component rendering and interactions
+- **Hook Testing**: Test custom hook behavior
+- **Service Testing**: Test API service methods
+- **Utility Testing**: Test utility functions
+
+### Integration Testing
+- **User Flows**: Test complete user workflows
+- **API Integration**: Test API service integration
+- **WebSocket Testing**: Test real-time functionality
+- **Authentication Flow**: Test login/logout processes
+
+### E2E Testing
+- **Critical Paths**: Test main user journeys
+- **Cross-browser**: Ensure compatibility across browsers
+- **Mobile Testing**: Test responsive design on mobile devices
+
+## Deployment and Production
+
+### Build Configuration
+- **Environment Variables**: Proper environment configuration
+- **Build Optimization**: Production-ready build settings
+- **Asset Optimization**: Minification and compression
+- **Security Headers**: Implement security best practices
+
+### Monitoring
+- **Error Tracking**: Implement error monitoring (e.g., Sentry)
+- **Performance Monitoring**: Track performance metrics
+- **Usage Analytics**: Basic usage tracking (privacy-compliant)
+- **Health Checks**: Application health monitoring
+
+## Security Considerations
+- **Input Sanitization**: Sanitize all user inputs
+- **XSS Protection**: Implement XSS protection measures
+- **CSRF Protection**: Cross-site request forgery protection
+- **Secure Storage**: Secure token and sensitive data storage
+- **Content Security Policy**: Implement CSP headers
+
+## Additional Notes
+
+### Development Commands
+- `pnpm dev`: Start development server
+- `pnpm build`: Build for production
+- `pnpm test`: Run test suite
+- `pnpm lint`: Run linting
+- `pnpm type-check`: TypeScript type checking
+
+### Browser Testing
+- Navigate to `http://localhost:3000/` for testing
+- Use `#/chat` for the main chat interface
+- Use `#/login` for authentication testing
+- Use `#/agents` for agent management
+
+### Code Review Checklist
+- [ ] TypeScript types are properly defined
+- [ ] Components are properly tested
+- [ ] Error handling is implemented
+- [ ] Performance considerations are addressed
+- [ ] Accessibility requirements are met
+- [ ] Security best practices are followed
+- [ ] Documentation is updated
+
+---
+
+**Important**: After making code changes, the development server will automatically reload. Focus on creating a polished, production-ready chat interface that seamlessly integrates with the Hypha ecosystem while maintaining excellent user experience and code quality.

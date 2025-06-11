@@ -264,6 +264,7 @@ export class HyphaAgentApi implements LLMApi {
 
       while (retryCount < maxRetries) {
         try {
+          log.debug("chatWithAgent", this.agentId, this.sessionId);
           // Chat with agent using async generator
           chatGenerator = await this.service.chatWithAgent({
             agentId: this.agentId,

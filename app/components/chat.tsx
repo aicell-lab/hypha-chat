@@ -817,7 +817,7 @@ function _Chat() {
   const hyphaAgent = useContext(HyphaAgentContext);
 
   const models = config.models;
-  const { resources } = useHyphaStore();
+  const { resources, isConnected } = useHyphaStore();
 
   // Track agent readiness for Hypha Agent client
   const [isAgentReady, setIsAgentReady] = useState(false);
@@ -912,6 +912,13 @@ function _Chat() {
       return;
     }
 
+    // Only proceed if user is connected to Hypha server
+    if (!isConnected) {
+      console.log("[Chat] Waiting for Hypha server connection...");
+      setIsAgentReady(false);
+      return;
+    }
+
     setIsAgentReady(false); // Reset readiness when starting agent creation
 
     const createOrSelectAgent = async () => {
@@ -919,7 +926,7 @@ function _Chat() {
       const agentId = session.id;
 
       try {
-        // Check if user is authenticated before attempting agent operations
+        // Double-check authentication before attempting agent operations
         if (!hyphaAgent.isAuthenticated()) {
           console.error("[Chat] User not authenticated - cannot create agent");
           setIsAgentReady(false);
@@ -1200,6 +1207,7 @@ function _Chat() {
     hyphaAgent,
     session.id,
     resources,
+    isConnected, // Add authentication state to dependencies
   ]);
 
   const context: RenderMessage[] = useMemo(() => {

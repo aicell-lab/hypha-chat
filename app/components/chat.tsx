@@ -862,7 +862,7 @@ function _Chat() {
   // Reset session status on initial loading
   useEffect(() => {
     chatStore.resetGeneratingStatus();
-  }, [chatStore]);
+  }, []);
 
   useEffect(() => {
     chatStore.updateCurrentSession((session) => {
@@ -885,7 +885,7 @@ function _Chat() {
       });
       session.messages = session.messages.filter((m) => m.content.length > 0);
     });
-  }, [chatStore]);
+  }, []);
 
   // Clear created agents when switching client types
   useEffect(() => {
@@ -893,6 +893,104 @@ function _Chat() {
       createdAgentsRef.current.clear();
     }
   }, [config.modelClientType]);
+
+  // Create agent automatically when using Hypha Agent client
+  useEffect(() => {
+    if (config.modelClientType !== ModelClient.HYPHA_AGENT || !hyphaAgent) {
+      return;
+    }
+
+    const createOrSelectAgent = async () => {
+      // Use session ID as unique agent identifier to avoid conflicts
+      const agentKey = `session-${session.id}`;
+
+      try {
+        // Check if we've already created an agent for this session
+        if (createdAgentsRef.current.has(agentKey)) {
+          console.log("[Chat] Agent already created for session:", session.id);
+          return;
+        }
+
+        const selectedAgent = config.modelConfig.selectedAgent;
+        let agentToCreate: any = null;
+
+        if (selectedAgent) {
+          // Use selected agent configuration with session-based naming
+          agentToCreate = {
+            name: `${selectedAgent.name} (${session.id.slice(-8)})`,
+            instructions: (selectedAgent as any).instructions,
+            kernelType: (selectedAgent as any).kernelType,
+            autoAttachKernel: (selectedAgent as any).autoAttachKernel,
+            startupScript: (selectedAgent as any).startupScript,
+            enablePlanning: (selectedAgent as any).enablePlanning,
+            maxSteps: (selectedAgent as any).maxSteps,
+          };
+        } else {
+          // Create default agent with session-based naming
+          agentToCreate = {
+            name: `Chat Assistant (${session.id.slice(-8)})`,
+            instructions: "You are a helpful AI assistant.",
+            kernelType: "PYTHON",
+            autoAttachKernel: true,
+            startupScript: `
+import sys
+print(f"Python {sys.version}")
+print("Chat session: ${session.id}")
+print("Environment ready!")
+            `.trim(),
+          };
+        }
+
+        console.log("[Chat] Creating agent for session:", session.id);
+
+        // Create new agent (no need to check for existing since each session gets unique agent)
+        const agent = await hyphaAgent.createAgent(agentToCreate);
+        hyphaAgent.setAgentId(agent.id);
+        createdAgentsRef.current.add(agentKey);
+        console.log(
+          "[Chat] Agent created and selected:",
+          agent.id,
+          "for session:",
+          session.id,
+        );
+      } catch (error: any) {
+        console.error(
+          "[Chat] Failed to create agent for session:",
+          session.id,
+          error,
+        );
+
+        // If agent creation fails, try to find any existing agent and reuse it
+        try {
+          const existingAgents = await hyphaAgent.listAgents();
+          if (existingAgents.length > 0) {
+            // Use the first available agent as fallback
+            const agent = existingAgents[0];
+            console.log(
+              "[Chat] Using fallback agent:",
+              agent.id,
+              "for session:",
+              session.id,
+            );
+            hyphaAgent.setAgentId(agent.id);
+            createdAgentsRef.current.add(agentKey);
+          }
+        } catch (listError) {
+          console.error(
+            "[Chat] Failed to list agents for fallback:",
+            listError,
+          );
+        }
+      }
+    };
+
+    createOrSelectAgent();
+  }, [
+    config.modelClientType,
+    config.modelConfig.selectedAgent?.id,
+    hyphaAgent,
+    session.id,
+  ]);
 
   const context: RenderMessage[] = useMemo(() => {
     return session.template.hideContext ? [] : session.template.context.slice();
@@ -1019,29 +1117,6 @@ function _Chat() {
       onSubmit(text);
     },
   });
-
-  useEffect(() => {
-    chatStore.updateCurrentSession((session) => {
-      const stopTiming = Date.now() - REQUEST_TIMEOUT_MS;
-      session.messages.forEach((m) => {
-        // check if should stop all stale messages
-        if (m.isError || new Date(m.date).getTime() < stopTiming) {
-          if (m.streaming) {
-            m.streaming = false;
-          }
-
-          if (m.content.length === 0) {
-            m.isError = true;
-            m.content = prettyObject({
-              error: true,
-              message: "empty response",
-            });
-          }
-        }
-      });
-      session.messages = session.messages.filter((m) => m.content.length > 0);
-    });
-  }, [chatStore]);
 
   const llm =
     config.modelClientType === ModelClient.MLCLLM_API

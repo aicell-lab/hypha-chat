@@ -113,7 +113,6 @@ export class HyphaAgentApi implements LLMApi {
         log.info("[HyphaAgent] Connecting to Hypha server...");
         this.server = await hyphaWebsocketClient.connectToServer({
           server_url: this.serverUrl,
-          client_id: "hypha-chat-client-agent",
           token: token,
           method_timeout: 180000,
         });

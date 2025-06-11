@@ -216,7 +216,6 @@ export const useHyphaStore = createPersistStore(
         if (!client) {
           client = await hyphaWebsocketClient.connectToServer({
             server_url: config.server_url,
-            client_id: "hypha-chat-client",
             token: config.token,
             method_timeout: config.method_timeout || 180000,
           });
@@ -233,7 +232,6 @@ export const useHyphaStore = createPersistStore(
             );
             client = await hyphaWebsocketClient.connectToServer({
               server_url: config.server_url,
-              client_id: "hypha-chat-client",
               token: config.token,
               method_timeout: config.method_timeout || 180000,
             });

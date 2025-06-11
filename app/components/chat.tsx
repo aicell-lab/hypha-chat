@@ -611,15 +611,7 @@ function FileUploadAction() {
   );
 }
 
-const INITIALIZATION_SCRIPT = `import micropip
-await micropip.install("hypha-rpc")
-print("Initialization complete")`;
-
-// Alternative minimal script for debugging
-const MINIMAL_SCRIPT = `print("Agent ready")`;
-
-// Use minimal script if there are issues with the full script
-const USE_MINIMAL_SCRIPT = false;
+const INITIALIZATION_SCRIPT = ``;
 
 function useScrollToBottom(
   scrollRef: RefObject<HTMLDivElement>,
@@ -1013,7 +1005,7 @@ function _Chat() {
               kernelType: "PYTHON",
               autoAttachKernel: true,
               startupScript:
-                (USE_MINIMAL_SCRIPT ? MINIMAL_SCRIPT : INITIALIZATION_SCRIPT) +
+                INITIALIZATION_SCRIPT +
                 "\n" +
                 (selectedAgentResource.manifest?.startup_script || ""),
               enablePlanning: true,
@@ -1031,9 +1023,7 @@ function _Chat() {
               instructions: "You are a helpful AI assistant.",
               kernelType: "PYTHON",
               autoAttachKernel: true,
-              startupScript: USE_MINIMAL_SCRIPT
-                ? MINIMAL_SCRIPT
-                : INITIALIZATION_SCRIPT,
+              startupScript: INITIALIZATION_SCRIPT,
               enablePlanning: true,
               maxSteps: 10,
             };
@@ -1046,9 +1036,7 @@ function _Chat() {
             instructions: "You are a helpful AI assistant.",
             kernelType: "PYTHON",
             autoAttachKernel: true,
-            startupScript: USE_MINIMAL_SCRIPT
-              ? MINIMAL_SCRIPT
-              : INITIALIZATION_SCRIPT,
+            startupScript: INITIALIZATION_SCRIPT,
           };
         }
 

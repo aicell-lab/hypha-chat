@@ -1344,8 +1344,20 @@ function _Chat() {
         : webllm;
 
   // Early return if LLM is not available - moved after all hooks
+  // For HYPHA_AGENT, only show loading if user is authenticated but agent not ready
   if (!llm) {
-    return <div>Loading LLM...</div>;
+    if (config.modelClientType === ModelClient.HYPHA_AGENT) {
+      // If user is not authenticated, don't show loading - let them see the login interface
+      if (!isConnected) {
+        // Continue to render the chat interface which will show login button
+      } else {
+        // User is authenticated but agent not ready - show loading
+        return <div>Loading LLM...</div>;
+      }
+    } else {
+      // For other client types, always show loading if LLM not available
+      return <div>Loading LLM...</div>;
+    }
   }
 
   // only search prompts when user input is short
@@ -1387,7 +1399,9 @@ function _Chat() {
       return;
     }
 
-    chatStore.onUserInput(userInput, llm, attachImages);
+    if (llm) {
+      chatStore.onUserInput(userInput, llm, attachImages);
+    }
     setAttachImages([]);
     localStorage.setItem(LAST_INPUT_KEY, userInput);
     setUserInput("");
@@ -1415,7 +1429,9 @@ function _Chat() {
 
   // stop response
   const onUserStop = () => {
-    llm.abort();
+    if (llm) {
+      llm.abort();
+    }
     chatStore.stopStreaming();
   };
 
@@ -1510,7 +1526,9 @@ function _Chat() {
     // resend the message
     const textContent = getMessageTextContent(userMessage);
     const images = getMessageImages(userMessage);
-    chatStore.onUserInput(textContent, llm, images);
+    if (llm) {
+      chatStore.onUserInput(textContent, llm, images);
+    }
     inputRef.current?.focus();
   };
 
@@ -1700,6 +1718,7 @@ function _Chat() {
           />
         </div>
         {config.modelClientType === ModelClient.HYPHA_AGENT &&
+          isConnected &&
           !isAgentReady && (
             <div className={styles["chat-message"]}>
               <div className={styles["chat-message-container"]}>

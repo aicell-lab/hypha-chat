@@ -274,16 +274,52 @@ const useHyphaAgent = () => {
   const [hyphaAgent, setHyphaAgent] = useState<HyphaAgentApi | undefined>(
     undefined,
   );
+  const { user, isConnected } = useHyphaStore();
 
+  // Initialize HyphaAgent when user is authenticated
   useEffect(() => {
-    const agentApi = new HyphaAgentApi();
+    console.log(
+      "[useHyphaAgent] Effect triggered. User:",
+      !!user,
+      "Connected:",
+      isConnected,
+    );
+
+    if (!user || !isConnected) {
+      console.log(
+        "[useHyphaAgent] User not authenticated or not connected, clearing agent",
+      );
+      // Clear existing agent if user is not authenticated
+      if (hyphaAgent) {
+        hyphaAgent.disconnect();
+        setHyphaAgent(undefined);
+      }
+      return;
+    }
+
+    // Don't recreate if we already have an agent for this user
+    if (hyphaAgent) {
+      console.log("[useHyphaAgent] Agent already exists for user");
+      return;
+    }
+
+    console.log(
+      "[useHyphaAgent] Creating new HyphaAgent (without external server)",
+    );
+    // Create HyphaAgent without external server - it will create its own connection
+    const agentApi = new HyphaAgentApi(
+      "https://hypha.aicell.io",
+      "hypha-agents/deno-app-engine",
+      // Don't pass external server - let it create its own connection
+    );
     setHyphaAgent(agentApi);
 
     // Cleanup function
     return () => {
+      console.log("[useHyphaAgent] Cleaning up agent");
       agentApi.disconnect();
     };
-  }, []);
+  }, [user, isConnected]); // Depend on user and connection state instead of server
 
   return hyphaAgent;
 };
@@ -373,6 +409,7 @@ export function Home() {
   const mlcllm = useMlcLLM();
   const hyphaAgent = useHyphaAgent();
   const config = useAppConfig(); // Move this hook call to the top
+  const { user, isConnected } = useHyphaStore();
 
   useSwitchTheme();
   useHtmlLang();
@@ -388,7 +425,8 @@ export function Home() {
 
   // For HYPHA_AGENT client type, we don't need WebLLM
   if (config.modelClientType === ModelClient.HYPHA_AGENT) {
-    if (!hyphaAgent) {
+    // Only show loading if user is authenticated but hyphaAgent is not ready
+    if (user && isConnected && !hyphaAgent) {
       return <Loading />;
     }
   } else {

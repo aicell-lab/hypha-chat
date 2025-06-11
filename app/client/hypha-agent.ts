@@ -49,6 +49,7 @@ export class HyphaAgentApi implements LLMApi {
   constructor(
     private serverUrl: string = "https://hypha.aicell.io",
     private serviceId: string = "hypha-agents/deno-app-engine",
+    private externalServer?: any,
   ) {}
 
   private getSavedToken(): string | null {
@@ -68,21 +69,55 @@ export class HyphaAgentApi implements LLMApi {
     if (this.isConnected) return;
 
     try {
-      // Get saved token from localStorage
-      const token = this.getSavedToken();
-      if (!token) {
-        throw new Error(
-          "No authentication token available. Please log in first.",
-        );
-      }
+      // Use external server if provided, otherwise create new connection
+      if (this.externalServer) {
+        log.info("[HyphaAgent] Using existing server connection...");
 
-      log.info("[HyphaAgent] Connecting to Hypha server...");
-      this.server = await hyphaWebsocketClient.connectToServer({
-        server_url: this.serverUrl,
-        client_id: "hypha-chat-client",
-        token: token,
-        method_timeout: 180000,
-      });
+        this.server = this.externalServer;
+
+        // Validate that the server has the required methods
+        if (!this.server || typeof this.server.getService !== "function") {
+          throw new Error(
+            `Invalid server connection - missing getService method. Got: ${typeof this.server?.getService}. Server keys: ${Object.keys(
+              this.server || {},
+            )
+              .slice(0, 10)
+              .join(", ")}`,
+          );
+        }
+
+        if (typeof this.server.listServices !== "function") {
+          throw new Error(
+            `Invalid server connection - missing listServices method. Got: ${typeof this.server?.listServices}. Server keys: ${Object.keys(
+              this.server || {},
+            )
+              .slice(0, 10)
+              .join(", ")}`,
+          );
+        }
+      } else {
+        log.warn(
+          "[HyphaAgent] No external server provided, creating new connection...",
+        );
+        log.warn(
+          "[HyphaAgent] This may cause 'Client already exists' errors if another connection exists",
+        );
+        // Get saved token from localStorage
+        const token = this.getSavedToken();
+        if (!token) {
+          throw new Error(
+            "No authentication token available. Please log in first.",
+          );
+        }
+
+        log.info("[HyphaAgent] Connecting to Hypha server...");
+        this.server = await hyphaWebsocketClient.connectToServer({
+          server_url: this.serverUrl,
+          client_id: "hypha-chat-client-agent",
+          token: token,
+          method_timeout: 180000,
+        });
+      }
 
       log.info("[HyphaAgent] Getting service...");
       try {
@@ -91,7 +126,15 @@ export class HyphaAgentApi implements LLMApi {
         });
       } catch (error) {
         // If direct access fails, try to find it in the list of services
+        log.info(
+          "[HyphaAgent] Direct service access failed, listing all services...",
+        );
         const services = await this.server.listServices();
+        log.info(
+          "[HyphaAgent] Available services:",
+          services.map((s: any) => ({ id: s.id, name: s.name })),
+        );
+
         this.service = services.find(
           (s: any) =>
             s.id === this.serviceId ||
@@ -101,8 +144,12 @@ export class HyphaAgentApi implements LLMApi {
         );
 
         if (!this.service) {
-          throw new Error(`Service ${this.serviceId} not found`);
+          throw new Error(
+            `Service ${this.serviceId} not found. Available services: ${services.map((s: any) => s.id).join(", ")}`,
+          );
         }
+
+        log.info("[HyphaAgent] Found service in list:", this.service.id);
       }
 
       this.isConnected = true;
@@ -406,14 +453,16 @@ export class HyphaAgentApi implements LLMApi {
 
   async disconnect(): Promise<void> {
     try {
-      if (this.server && "disconnect" in this.server) {
+      // Only disconnect if we created the connection (not using external server)
+      if (this.server && "disconnect" in this.server && !this.externalServer) {
         await this.server.disconnect();
       }
     } catch (error) {
       log.error("[HyphaAgent] Error disconnecting:", error);
     }
 
-    this.server = null;
+    // Reset state but don't clear external server
+    this.server = this.externalServer || null;
     this.service = null;
     this.isConnected = false;
     this.agentId = null;
@@ -423,5 +472,15 @@ export class HyphaAgentApi implements LLMApi {
   // Check if user is authenticated
   isAuthenticated(): boolean {
     return this.getSavedToken() !== null;
+  }
+
+  // Set external server connection
+  setServer(server: any): void {
+    this.externalServer = server;
+    this.server = server;
+    // Reset connection state to force re-initialization with new server
+    if (server) {
+      this.isConnected = false;
+    }
   }
 }

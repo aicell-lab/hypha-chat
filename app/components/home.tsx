@@ -187,9 +187,19 @@ const useWebLLM = () => {
 
   // Initialize WebLLM engine
   useEffect(() => {
+    // Prevent duplicate initialization
+    if (isWebllmInitialized.current || webllm || isWebllmActive) {
+      return;
+    }
+
     if ("serviceWorker" in navigator) {
       log.info("Service Worker API is available and in use.");
       navigator.serviceWorker.ready.then(() => {
+        // Double-check before proceeding
+        if (isWebllmInitialized.current || webllm || isWebllmActive) {
+          return;
+        }
+
         log.info("Service Worker is activated.");
         // Check whether WebGPU is available in Service Worker
         const request = {
@@ -211,7 +221,7 @@ const useWebLLM = () => {
                 ? "Service Worker has WebGPU Available."
                 : "Service Worker does not have available WebGPU.",
             );
-            if (!webllm && !isWebllmActive) {
+            if (!webllm && !isWebllmActive && !isWebllmInitialized.current) {
               setWebLLM(
                 new WebLLMApi(
                   isWebGPUAvailable ? "serviceWorker" : "webWorker",
@@ -238,10 +248,12 @@ const useWebLLM = () => {
       log.info(
         "Service Worker API is unavailable. Falling back to use web worker.",
       );
-      setWebLLM(new WebLLMApi("webWorker", config.logLevel));
-      setWebllmAlive(true);
-      isWebllmInitialized.current = true;
-      clearTimeout(timeout);
+      if (!isWebllmInitialized.current && !webllm && !isWebllmActive) {
+        setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+        setWebllmAlive(true);
+        isWebllmInitialized.current = true;
+        clearTimeout(timeout);
+      }
     }
   }, []);
 
@@ -290,34 +302,43 @@ const useHyphaAgent = () => {
         "[useHyphaAgent] User not authenticated or not connected, clearing agent",
       );
       // Clear existing agent if user is not authenticated
-      if (hyphaAgent) {
-        hyphaAgent.disconnect();
-        setHyphaAgent(undefined);
-      }
+      setHyphaAgent((prev) => {
+        if (prev) {
+          prev.disconnect();
+        }
+        return undefined;
+      });
       return;
     }
 
     // Don't recreate if we already have an agent for this user
-    if (hyphaAgent) {
-      console.log("[useHyphaAgent] Agent already exists for user");
-      return;
-    }
+    setHyphaAgent((prev) => {
+      if (prev) {
+        console.log("[useHyphaAgent] Agent already exists for user");
+        return prev;
+      }
 
-    console.log(
-      "[useHyphaAgent] Creating new HyphaAgent (without external server)",
-    );
-    // Create HyphaAgent without external server - it will create its own connection
-    const agentApi = new HyphaAgentApi(
-      "https://hypha.aicell.io",
-      "hypha-agents/deno-app-engine",
-      // Don't pass external server - let it create its own connection
-    );
-    setHyphaAgent(agentApi);
+      console.log(
+        "[useHyphaAgent] Creating new HyphaAgent (without external server)",
+      );
+      // Create HyphaAgent without external server - it will create its own connection
+      const agentApi = new HyphaAgentApi(
+        "https://hypha.aicell.io",
+        "hypha-agents/deno-app-engine",
+        // Don't pass external server - let it create its own connection
+      );
+      return agentApi;
+    });
 
     // Cleanup function
     return () => {
       console.log("[useHyphaAgent] Cleaning up agent");
-      agentApi.disconnect();
+      setHyphaAgent((prev) => {
+        if (prev) {
+          prev.disconnect();
+        }
+        return undefined;
+      });
     };
   }, [user, isConnected]); // Depend on user and connection state instead of server
 

@@ -819,6 +819,13 @@ function _Chat() {
   const models = config.models;
   const { resources, isConnected } = useHyphaStore();
 
+  // Memoize selected agent resource to prevent unnecessary re-renders
+  const selectedAgentResource = useMemo(() => {
+    const selectedAgent = config.modelConfig.selectedAgent;
+    if (!selectedAgent || !resources) return null;
+    return resources.find((r: any) => r.id === selectedAgent.id) || null;
+  }, [config.modelConfig.selectedAgent?.id, resources]);
+
   // Track agent readiness for Hypha Agent client
   const [isAgentReady, setIsAgentReady] = useState(false);
 
@@ -919,9 +926,12 @@ function _Chat() {
       return;
     }
 
+    // Prevent duplicate creation during React Strict Mode double-invoke
+    let cancelled = false;
     setIsAgentReady(false); // Reset readiness when starting agent creation
 
     const createOrSelectAgent = async () => {
+      if (cancelled) return;
       // Use session ID as agent identifier
       const agentId = session.id;
 
@@ -936,6 +946,7 @@ function _Chat() {
         // Check if we've already created an agent for this session
         if (createdAgentsRef.current.has(agentId)) {
           console.log("[Chat] Agent already created for session:", session.id);
+          setIsAgentReady(true);
           return;
         }
 
@@ -990,26 +1001,21 @@ function _Chat() {
         let agentToCreate: any = null;
 
         if (selectedAgent) {
-          // Look up the full agent resource from the resources list using the stored ID
-          const fullAgentResource = resources.find(
-            (r: any) => r.id === selectedAgent.id,
-          );
-
-          if (fullAgentResource) {
+          if (selectedAgentResource) {
             // Use selected agent configuration with session-based naming
             agentToCreate = {
               id: session.id,
-              name: `${fullAgentResource.manifest?.name || selectedAgent.name} (${session.id.slice(-8)})`,
+              name: `${selectedAgentResource.manifest?.name || selectedAgent.name} (${session.id.slice(-8)})`,
               instructions:
-                (fullAgentResource.manifest as any)?.instructions ||
-                fullAgentResource.description ||
+                (selectedAgentResource.manifest as any)?.instructions ||
+                selectedAgentResource.description ||
                 "You are a helpful AI assistant.",
               kernelType: "PYTHON",
               autoAttachKernel: true,
               startupScript:
                 (USE_MINIMAL_SCRIPT ? MINIMAL_SCRIPT : INITIALIZATION_SCRIPT) +
                 "\n" +
-                (fullAgentResource.manifest?.startup_script || ""),
+                (selectedAgentResource.manifest?.startup_script || ""),
               enablePlanning: true,
               maxSteps: 10,
             };
@@ -1197,16 +1203,21 @@ function _Chat() {
     };
 
     createOrSelectAgent().catch((error) => {
-      console.error("[Chat] Unexpected error in agent creation:", error);
-      setIsAgentReady(false);
+      if (!cancelled) {
+        console.error("[Chat] Unexpected error in agent creation:", error);
+        setIsAgentReady(false);
+      }
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     config.modelClientType,
     config.modelConfig.selectedAgent?.id,
-    config.modelConfig.selectedAgent,
+    selectedAgentResource,
     hyphaAgent,
     session.id,
-    resources,
     isConnected, // Add authentication state to dependencies
   ]);
 

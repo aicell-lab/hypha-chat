@@ -16,6 +16,7 @@ import { List, ListItem, Modal, Select, showToast } from "./ui-lib";
 import React, { useState } from "react";
 import { IconButton } from "./button";
 import AgentSelect from "./model-select";
+import { useHyphaStore } from "../store/hypha";
 
 export function ModelConfigList() {
   const config = useAppConfig();
@@ -272,7 +273,17 @@ export function ModelConfigList() {
             setShowModelSelector(false);
           }}
           onSelectAgent={(agentId: string) => {
-            config.selectModel(agentId as Model);
+            // Find the agent resource from resources
+            const { resources } = useHyphaStore.getState();
+            const agent = resources.find((r: any) => r.id === agentId);
+            if (agent) {
+              // Switch to Hypha Agent client and select agent
+              config.update((config) => {
+                config.modelClientType = ModelClient.HYPHA_AGENT;
+              });
+              config.selectAgent(agentId, agent.manifest.name);
+            }
+            setShowModelSelector(false);
           }}
         />
       )}

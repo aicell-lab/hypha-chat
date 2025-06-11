@@ -611,11 +611,15 @@ function FileUploadAction() {
   );
 }
 
-const INITIALIZATION_SCRIPT = `
-import micropip
+const INITIALIZATION_SCRIPT = `import micropip
 await micropip.install("hypha-rpc")
-print("You should always use python scripts to compute, gather information and do most tasks.\nAlways use <returnToUser> to return results to the user, do not provide plain text answers without wrapped in tags.")
-`;
+print("Initialization complete")`;
+
+// Alternative minimal script for debugging
+const MINIMAL_SCRIPT = `print("Agent ready")`;
+
+// Use minimal script if there are issues with the full script
+const USE_MINIMAL_SCRIPT = false;
 
 function useScrollToBottom(
   scrollRef: RefObject<HTMLDivElement>,
@@ -747,16 +751,19 @@ export function ChatActions(props: {
           }}
           selectedAgent={config.modelConfig.selectedAgent?.id}
           onSelectAgent={(agentId: string) => {
-            // Find the agent name from resources
-            const agent = resources.find((r) => r.id === agentId);
-            const agentName = agent?.manifest.name || agentId;
+            // Find the agent resource from resources
+            const agent = resources.find((r: any) => r.id === agentId);
+            if (!agent) {
+              showToast(`Agent not found: ${agentId}`);
+              return;
+            }
 
             // Switch to Hypha Agent client and select agent
             config.update((config) => {
               config.modelClientType = ModelClient.HYPHA_AGENT;
             });
-            config.selectAgent(agentId, agentName);
-            showToast(`Selected: ${agentName}`);
+            config.selectAgent(agentId, agent.manifest.name);
+            showToast(`Selected: ${agent.manifest.name}`);
             setShowModelSelector(false);
           }}
         />
@@ -810,6 +817,10 @@ function _Chat() {
   const hyphaAgent = useContext(HyphaAgentContext);
 
   const models = config.models;
+  const { resources } = useHyphaStore();
+
+  // Track agent readiness for Hypha Agent client
+  const [isAgentReady, setIsAgentReady] = useState(false);
 
   // prompt hints
   const promptStore = usePromptStore();
@@ -897,56 +908,211 @@ function _Chat() {
   // Create agent automatically when using Hypha Agent client
   useEffect(() => {
     if (config.modelClientType !== ModelClient.HYPHA_AGENT || !hyphaAgent) {
+      setIsAgentReady(config.modelClientType !== ModelClient.HYPHA_AGENT);
       return;
     }
 
+    setIsAgentReady(false); // Reset readiness when starting agent creation
+
     const createOrSelectAgent = async () => {
-      // Use session ID as unique agent identifier to avoid conflicts
-      const agentKey = `session-${session.id}`;
+      // Use session ID as agent identifier
+      const agentId = session.id;
 
       try {
+        // Check if user is authenticated before attempting agent operations
+        if (!hyphaAgent.isAuthenticated()) {
+          console.error("[Chat] User not authenticated - cannot create agent");
+          setIsAgentReady(false);
+          return;
+        }
+
         // Check if we've already created an agent for this session
-        if (createdAgentsRef.current.has(agentKey)) {
+        if (createdAgentsRef.current.has(agentId)) {
           console.log("[Chat] Agent already created for session:", session.id);
           return;
         }
 
+        // First, try to find an existing agent with this session ID
+        try {
+          const existingAgents = await hyphaAgent.listAgents();
+          console.log(
+            "[Chat] Checking existing agents:",
+            existingAgents.map((a) => ({ id: a.id, name: a.name })),
+          );
+
+          const existingAgent = existingAgents.find((agent) => {
+            // Check if agent ID ends with session ID (for workspace-prefixed IDs)
+            const agentIdMatches =
+              agent.id?.endsWith(session.id) || agent.id?.includes(session.id);
+            // Check if agent name contains session ID
+            const nameMatches = agent.name?.includes(session.id.slice(-8));
+            console.log(
+              "[Chat] Checking agent:",
+              agent.id,
+              "matches ID:",
+              agentIdMatches,
+              "matches name:",
+              nameMatches,
+            );
+            return agentIdMatches || nameMatches;
+          });
+
+          if (existingAgent) {
+            console.log(
+              "[Chat] Reusing existing agent:",
+              existingAgent.id,
+              "for session:",
+              session.id,
+            );
+            hyphaAgent.setAgentId(existingAgent.id);
+            createdAgentsRef.current.add(agentId);
+            setIsAgentReady(true);
+            return;
+          } else {
+            console.log(
+              "[Chat] No existing agent found for session:",
+              session.id,
+            );
+          }
+        } catch (listError) {
+          console.warn("[Chat] Could not list existing agents:", listError);
+        }
+
         const selectedAgent = config.modelConfig.selectedAgent;
+
         let agentToCreate: any = null;
 
         if (selectedAgent) {
-          // Use selected agent configuration with session-based naming
-          agentToCreate = {
-            name: `${selectedAgent.name} (${session.id.slice(-8)})`,
-            instructions: (selectedAgent as any).instructions,
-            kernelType: (selectedAgent as any).kernelType,
-            autoAttachKernel: (selectedAgent as any).autoAttachKernel,
-            startupScript: (selectedAgent as any).startupScript,
-            enablePlanning: (selectedAgent as any).enablePlanning,
-            maxSteps: (selectedAgent as any).maxSteps,
-          };
+          // Look up the full agent resource from the resources list using the stored ID
+          const fullAgentResource = resources.find(
+            (r: any) => r.id === selectedAgent.id,
+          );
+
+          if (fullAgentResource) {
+            // Use selected agent configuration with session-based naming
+            agentToCreate = {
+              id: session.id,
+              name: `${fullAgentResource.manifest?.name || selectedAgent.name} (${session.id.slice(-8)})`,
+              instructions:
+                (fullAgentResource.manifest as any)?.instructions ||
+                fullAgentResource.description ||
+                "You are a helpful AI assistant.",
+              kernelType: "PYTHON",
+              autoAttachKernel: true,
+              startupScript:
+                (USE_MINIMAL_SCRIPT ? MINIMAL_SCRIPT : INITIALIZATION_SCRIPT) +
+                "\n" +
+                (fullAgentResource.manifest?.startup_script || ""),
+              enablePlanning: true,
+              maxSteps: 10,
+            };
+          } else {
+            // Agent not found in resources, use fallback with stored name
+            console.warn(
+              "[Chat] Could not find full resource for agent:",
+              selectedAgent.id,
+            );
+            agentToCreate = {
+              id: session.id,
+              name: `${selectedAgent.name} (${session.id.slice(-8)})`,
+              instructions: "You are a helpful AI assistant.",
+              kernelType: "PYTHON",
+              autoAttachKernel: true,
+              startupScript: USE_MINIMAL_SCRIPT
+                ? MINIMAL_SCRIPT
+                : INITIALIZATION_SCRIPT,
+              enablePlanning: true,
+              maxSteps: 10,
+            };
+          }
         } else {
           // Create default agent with session-based naming
           agentToCreate = {
+            id: session.id,
             name: `Chat Assistant (${session.id.slice(-8)})`,
             instructions: "You are a helpful AI assistant.",
             kernelType: "PYTHON",
             autoAttachKernel: true,
-            startupScript: `
-import sys
-print(f"Python {sys.version}")
-print("Chat session: ${session.id}")
-print("Environment ready!")
-            `.trim(),
+            startupScript: USE_MINIMAL_SCRIPT
+              ? MINIMAL_SCRIPT
+              : INITIALIZATION_SCRIPT,
           };
         }
 
-        console.log("[Chat] Creating agent for session:", session.id);
+        console.log(
+          "[Chat] Creating agent for session:",
+          session.id,
+          "with startup script:",
+          agentToCreate.startupScript,
+        );
+        console.log("[Chat] Agent config:", agentToCreate);
 
-        // Create new agent (no need to check for existing since each session gets unique agent)
-        const agent = await hyphaAgent.createAgent(agentToCreate);
+        // Create new agent
+        let agent;
+        try {
+          agent = await hyphaAgent.createAgent(agentToCreate);
+
+          if (!agent || !agent.id) {
+            throw new Error("Agent creation returned invalid response");
+          }
+        } catch (createError: any) {
+          // If agent already exists, try to find and reuse it
+          if (createError.message?.includes("already exists")) {
+            console.log(
+              "[Chat] Agent already exists, attempting to find and reuse for session:",
+              session.id,
+            );
+            try {
+              const existingAgents = await hyphaAgent.listAgents();
+              const existingAgent = existingAgents.find((agent) => {
+                const agentIdMatches =
+                  agent.id?.endsWith(session.id) ||
+                  agent.id?.includes(session.id);
+                const nameMatches = agent.name?.includes(session.id.slice(-8));
+                return agentIdMatches || nameMatches;
+              });
+
+              if (existingAgent) {
+                console.log("[Chat] Found existing agent:", existingAgent.id);
+                hyphaAgent.setAgentId(existingAgent.id);
+                createdAgentsRef.current.add(agentId);
+                setIsAgentReady(true);
+                return;
+              }
+            } catch (findError) {
+              console.warn(
+                "[Chat] Could not find existing agent after creation failure:",
+                findError,
+              );
+            }
+          }
+          throw createError; // Re-throw if not a "already exists" error or couldn't find existing
+        }
+
+        // Use the full agent ID for chat operations
         hyphaAgent.setAgentId(agent.id);
-        createdAgentsRef.current.add(agentKey);
+
+        // Add a delay to ensure agent is fully initialized
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Verify agent is available before marking as created
+        try {
+          const agents = await hyphaAgent.listAgents();
+          const createdAgent = agents.find((a) => a.id === agent.id);
+          if (!createdAgent) {
+            console.warn(
+              "[Chat] Agent not found in list after creation, but proceeding anyway",
+            );
+          }
+        } catch (listError) {
+          console.warn(
+            "[Chat] Could not verify agent availability:",
+            listError,
+          );
+        }
+
+        createdAgentsRef.current.add(agentId);
+        setIsAgentReady(true);
         console.log(
           "[Chat] Agent created and selected:",
           agent.id,
@@ -960,6 +1126,32 @@ print("Environment ready!")
           error,
         );
 
+        // Show user-friendly error message
+        const errorMessage =
+          error?.message || error?.toString() || "Unknown error";
+        if (
+          errorMessage.includes("authentication") ||
+          errorMessage.includes("token") ||
+          errorMessage.includes("unauthorized") ||
+          errorMessage.includes("Authentication failed")
+        ) {
+          console.error(
+            "[Chat] Authentication error - user needs to log in again",
+          );
+          setIsAgentReady(false);
+          return; // Don't try fallback for auth errors
+        } else if (
+          errorMessage.includes("not found") ||
+          errorMessage.includes("Agent")
+        ) {
+          console.warn("[Chat] Agent-related error, will try fallback");
+        } else {
+          console.error(
+            "[Chat] Unexpected error during agent creation:",
+            error,
+          );
+        }
+
         // If agent creation fails, try to find any existing agent and reuse it
         try {
           const existingAgents = await hyphaAgent.listAgents();
@@ -972,24 +1164,42 @@ print("Environment ready!")
               "for session:",
               session.id,
             );
+
+            // Use the full agent ID for chat operations
             hyphaAgent.setAgentId(agent.id);
-            createdAgentsRef.current.add(agentKey);
+
+            // Small delay to ensure the agent connection is stable
+            await new Promise((resolve) => setTimeout(resolve, 500));
+
+            createdAgentsRef.current.add(agentId);
+            setIsAgentReady(true);
+          } else {
+            console.error(
+              "[Chat] No agents available for fallback. User will need to create an agent manually.",
+            );
+            setIsAgentReady(false);
           }
         } catch (listError) {
           console.error(
             "[Chat] Failed to list agents for fallback:",
             listError,
           );
+          setIsAgentReady(false);
         }
       }
     };
 
-    createOrSelectAgent();
+    createOrSelectAgent().catch((error) => {
+      console.error("[Chat] Unexpected error in agent creation:", error);
+      setIsAgentReady(false);
+    });
   }, [
     config.modelClientType,
     config.modelConfig.selectedAgent?.id,
+    config.modelConfig.selectedAgent,
     hyphaAgent,
     session.id,
+    resources,
   ]);
 
   const context: RenderMessage[] = useMemo(() => {
@@ -1162,6 +1372,12 @@ print("Environment ready!")
     }
 
     if (isStreaming) return;
+
+    // Check if agent is ready for Hypha Agent client
+    if (config.modelClientType === ModelClient.HYPHA_AGENT && !isAgentReady) {
+      console.warn("[Chat] Agent not ready yet, please wait...");
+      return;
+    }
 
     chatStore.onUserInput(userInput, llm, attachImages);
     setAttachImages([]);
@@ -1475,6 +1691,31 @@ print("Environment ready!")
             fullWidth
           />
         </div>
+        {config.modelClientType === ModelClient.HYPHA_AGENT &&
+          !isAgentReady && (
+            <div className={styles["chat-message"]}>
+              <div className={styles["chat-message-container"]}>
+                <div className={styles["chat-message-header"]}>
+                  <div className={styles["chat-message-avatar"]}>
+                    <Avatar avatar="2699-fe0f" />
+                  </div>
+                  <div className={styles["chat-message-role-name"]}>System</div>
+                </div>
+                <div className={styles["chat-message-item"]}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <LoadingIcon />
+                    <span>Setting up your AI agent, please wait...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         {messages.map((message, i) => {
           const isUser = message.role === "user";
           const isContext = i < context.length;
@@ -1724,7 +1965,12 @@ print("Environment ready!")
             id="chat-input"
             ref={inputRef}
             className={styles["chat-input"]}
-            placeholder={Locale.Chat.Input(submitKey)}
+            placeholder={
+              config.modelClientType === ModelClient.HYPHA_AGENT &&
+              !isAgentReady
+                ? "Setting up agent, please wait..."
+                : Locale.Chat.Input(submitKey)
+            }
             onInput={(e) => onInput(e.currentTarget.value)}
             value={userInput}
             onKeyDown={onInputKeyDown}
@@ -1733,8 +1979,17 @@ print("Environment ready!")
             onPaste={handlePaste}
             rows={inputRows}
             autoFocus={autoFocus}
+            disabled={
+              config.modelClientType === ModelClient.HYPHA_AGENT &&
+              !isAgentReady
+            }
             style={{
               fontSize: config.fontSize,
+              opacity:
+                config.modelClientType === ModelClient.HYPHA_AGENT &&
+                !isAgentReady
+                  ? 0.6
+                  : 1,
             }}
           />
           {attachImages.length != 0 && (
@@ -1774,6 +2029,10 @@ print("Environment ready!")
               text={Locale.Chat.Send}
               className={styles["chat-input-send"]}
               type="primary"
+              disabled={
+                config.modelClientType === ModelClient.HYPHA_AGENT &&
+                !isAgentReady
+              }
               onClick={() => onSubmit(userInput)}
             />
           )}

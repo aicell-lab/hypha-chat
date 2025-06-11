@@ -374,9 +374,33 @@ export const useChatStore = createPersistStore(
             });
           },
           onError(error) {
-            const errorMessage =
-              error.message || error.toString?.() || undefined;
-            const isAborted = errorMessage?.includes("aborted");
+            if (!error) {
+              console.error("[Chat] failed ", error);
+              return;
+            }
+
+            // Safer error message extraction with proper fallback
+            let errorMessage = "Unknown error";
+            try {
+              if (error?.message && typeof error.message === "string") {
+                errorMessage = error.message;
+              } else if (error && typeof error.toString === "function") {
+                const errorStr = error.toString();
+                if (
+                  errorStr &&
+                  typeof errorStr === "string" &&
+                  errorStr !== "[object Object]"
+                ) {
+                  errorMessage = errorStr;
+                }
+              } else if (typeof error === "string") {
+                errorMessage = error;
+              }
+            } catch (e) {
+              // Keep default "Unknown error" if any extraction fails
+            }
+
+            const isAborted = errorMessage.includes("aborted");
             botMessage.content += "\n\n" + errorMessage;
             botMessage.streaming = false;
             userMessage.isError = !isAborted;

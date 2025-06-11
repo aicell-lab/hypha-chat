@@ -51,14 +51,37 @@ export class HyphaAgentApi implements LLMApi {
     private serviceId: string = "hypha-agents/deno-app-engine",
   ) {}
 
+  private getSavedToken(): string | null {
+    if (typeof window === "undefined") return null;
+
+    const token = localStorage.getItem("token");
+    if (token) {
+      const tokenExpiry = localStorage.getItem("tokenExpiry");
+      if (tokenExpiry && new Date(tokenExpiry) > new Date()) {
+        return token;
+      }
+    }
+    return null;
+  }
+
   async initialize() {
     if (this.isConnected) return;
 
     try {
+      // Get saved token from localStorage
+      const token = this.getSavedToken();
+      if (!token) {
+        throw new Error(
+          "No authentication token available. Please log in first.",
+        );
+      }
+
       log.info("[HyphaAgent] Connecting to Hypha server...");
       this.server = await hyphaWebsocketClient.connectToServer({
         server_url: this.serverUrl,
         client_id: "hypha-chat-client",
+        token: token,
+        method_timeout: 180000,
       });
 
       log.info("[HyphaAgent] Getting service...");
@@ -84,8 +107,20 @@ export class HyphaAgentApi implements LLMApi {
 
       this.isConnected = true;
       log.info("[HyphaAgent] Connected successfully");
-    } catch (error) {
+    } catch (error: any) {
       log.error("[HyphaAgent] Failed to connect:", error);
+
+      // Check if this is an authentication error
+      const errorMessage =
+        error?.message || error?.toString() || "Unknown error";
+      if (
+        errorMessage.includes("authentication") ||
+        errorMessage.includes("token") ||
+        errorMessage.includes("unauthorized")
+      ) {
+        throw new Error("Authentication failed. Please log in again.");
+      }
+
       throw error;
     }
   }
@@ -118,12 +153,29 @@ export class HyphaAgentApi implements LLMApi {
       }
 
       log.info("[HyphaAgent] Creating new agent:", config.id);
+      log.debug("[HyphaAgent] Agent config:", config);
+
       const agent = await this.service.createAgent(config);
       this.agentId = agent.id;
       log.info("[HyphaAgent] Agent created successfully:", agent.id);
       return agent;
-    } catch (error) {
+    } catch (error: any) {
       log.error("[HyphaAgent] Failed to create agent:", error);
+
+      // Check if this is a startup script error
+      const errorMessage =
+        error?.message || error?.toString() || "Unknown error";
+      if (
+        errorMessage.includes("Startup script failed") ||
+        errorMessage.includes("SyntaxError") ||
+        errorMessage.includes("unterminated string")
+      ) {
+        log.error(
+          "[HyphaAgent] Startup script error detected. This may be due to script formatting issues.",
+        );
+        log.error("[HyphaAgent] Startup script content:", config.startupScript);
+      }
+
       throw error;
     }
   }
@@ -136,7 +188,7 @@ export class HyphaAgentApi implements LLMApi {
     }
 
     try {
-      await this.service.destroyAgent({ agentId });
+      await this.service.destroyAgent({ agentId: agentId });
       if (this.agentId === agentId) {
         this.agentId = null;
         this.sessionId = null;
@@ -203,12 +255,70 @@ export class HyphaAgentApi implements LLMApi {
     let usage: CompletionUsage | undefined;
 
     try {
-      // Chat with agent using async generator
-      const chatGenerator = await this.service.chatWithAgent({
-        agentId: this.agentId,
-        message: messageContent,
-        sessionId: this.sessionId,
-      });
+      log.info("[HyphaAgent] Starting chat with agent:", this.agentId);
+
+      // Retry logic for agent initialization
+      let chatGenerator;
+      let retryCount = 0;
+      const maxRetries = 3;
+
+      while (retryCount < maxRetries) {
+        try {
+          // Chat with agent using async generator
+          chatGenerator = await this.service.chatWithAgent({
+            agentId: this.agentId,
+            message: messageContent,
+            sessionId: this.sessionId,
+          });
+          break; // Success, exit retry loop
+        } catch (error: any) {
+          retryCount++;
+          // Safer error message extraction with proper fallback
+          let errorMessage = "Unknown error";
+          try {
+            if (error?.message && typeof error.message === "string") {
+              errorMessage = error.message;
+            } else if (error && typeof error.toString === "function") {
+              const errorStr = error.toString();
+              if (
+                errorStr &&
+                typeof errorStr === "string" &&
+                errorStr !== "[object Object]"
+              ) {
+                errorMessage = errorStr;
+              }
+            } else if (typeof error === "string") {
+              errorMessage = error;
+            }
+          } catch (e) {
+            // Keep default "Unknown error" if any extraction fails
+          }
+
+          log.warn(
+            `[HyphaAgent] Chat attempt ${retryCount} failed:`,
+            errorMessage,
+          );
+
+          if (
+            retryCount < maxRetries &&
+            (errorMessage.includes("not found") ||
+              errorMessage.includes("Agent") ||
+              errorMessage.includes("timeout"))
+          ) {
+            // Wait before retrying (exponential backoff)
+            await new Promise((resolve) =>
+              setTimeout(resolve, 1000 * retryCount),
+            );
+            continue;
+          } else {
+            throw error; // Re-throw if max retries reached or unrecoverable error
+          }
+        }
+      }
+
+      if (!chatGenerator) {
+        throw new Error("Failed to create chat generator after retries");
+      }
 
       for await (const chunk of chatGenerator) {
         // Check if aborted
@@ -256,7 +366,10 @@ export class HyphaAgentApi implements LLMApi {
         options.onFinish(accumulatedContent, stopReason, usage);
       }
     } catch (error: any) {
-      if (error.name === "AbortError" || this.abortController?.signal.aborted) {
+      if (
+        error?.name === "AbortError" ||
+        this.abortController?.signal.aborted
+      ) {
         log.info("[HyphaAgent] Chat aborted by user");
         return;
       }
@@ -304,5 +417,10 @@ export class HyphaAgentApi implements LLMApi {
     this.isConnected = false;
     this.agentId = null;
     this.sessionId = null;
+  }
+
+  // Check if user is authenticated
+  isAuthenticated(): boolean {
+    return this.getSavedToken() !== null;
   }
 }

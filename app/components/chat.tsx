@@ -676,7 +676,7 @@ export function ChatActions(props: {
 
   const getCurrentDisplayName = () => {
     if (config.modelClientType === ModelClient.HYPHA_AGENT) {
-      return config.modelConfig.selectedAgent?.name || "Default Assistant";
+      return config.modelConfig.selectedAgent?.name || "";
     }
     return (
       models.find((m) => m.name === currentModel)?.display_name || currentModel
@@ -1798,10 +1798,12 @@ function _Chat() {
                       )}
                       {message.role === "assistant" && (
                         <div className={styles["chat-message-role-name"]}>
-                          {models.find((m) => m.name === message.model)
-                            ? models.find((m) => m.name === message.model)!
-                                .display_name
-                            : message.model}
+                          {config.modelClientType === ModelClient.HYPHA_AGENT
+                            ? config.modelConfig.selectedAgent?.name || ""
+                            : models.find((m) => m.name === message.model)
+                              ? models.find((m) => m.name === message.model)!
+                                  .display_name
+                              : message.model}
                         </div>
                       )}
                       {showActions && (
@@ -1970,6 +1972,34 @@ function _Chat() {
       <div className={styles["chat-input-panel"]}>
         <ScrollDownToast onclick={scrollToBottom} show={!hitBottom} />
         <PromptHints prompts={promptHints} onPromptSelect={onPromptSelect} />
+
+        {/* Warning for non-authenticated users */}
+        {config.modelClientType === ModelClient.HYPHA_AGENT && !isConnected && (
+          <div className={styles["login-warning"]}>
+            <div className={styles["login-warning-content"]}>
+              <svg
+                className={styles["login-warning-icon"]}
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.728-.833-2.498 0L4.316 16.5c-.77.833.192 2.5 1.732 2.5z"
+                />
+              </svg>
+              <div className={styles["login-warning-text"]}>
+                <strong>Please log in to chat with AI agents</strong>
+                <p>
+                  You need to authenticate with the Hypha server to use the chat
+                  functionality.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         <ChatActions
           uploadImage={uploadImage}

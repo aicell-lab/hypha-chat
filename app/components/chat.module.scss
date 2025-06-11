@@ -566,6 +566,69 @@
   }
 }
 
+.login-warning {
+  margin-bottom: 10px;
+  border-radius: 8px;
+  border: 1px solid #fbbf24;
+  background-color: #fef3c7;
+  padding: 12px;
+  animation: slide-in ease 0.3s;
+
+  .login-warning-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .login-warning-icon {
+    width: 20px;
+    height: 20px;
+    color: #f59e0b;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .login-warning-text {
+    flex: 1;
+    
+    strong {
+      display: block;
+      color: #92400e;
+      font-weight: 600;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    p {
+      color: #92400e;
+      margin: 0;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .login-warning {
+    border-color: #d97706;
+    background-color: #451a03;
+
+    .login-warning-icon {
+      color: #f59e0b;
+    }
+
+    .login-warning-text {
+      strong {
+        color: #fbbf24;
+      }
+
+      p {
+        color: #fcd34d;
+      }
+    }
+  }
+}
+
 @mixin single-line {
   white-space: nowrap;
   overflow: hidden;

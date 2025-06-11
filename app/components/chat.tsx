@@ -659,17 +659,17 @@ export function ChatActions(props: {
   hitBottom: boolean;
   uploading: boolean;
 }) {
-  const config = useAppConfig();
   const chatStore = useChatStore();
-  const { resources } = useHyphaStore();
-
-  // switch model
+  const config = useAppConfig();
   const currentModel = config.modelConfig.model;
   const models = config.models;
+  const { resources } = useHyphaStore();
+
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [showUploadImage, setShowUploadImage] = useState(false);
 
-  // Get display name for current model/agent
+  const { setAttachImages, setUploading } = props;
+
   const getCurrentDisplayName = () => {
     if (config.modelClientType === ModelClient.HYPHA_AGENT) {
       return config.modelConfig.selectedAgent?.name || "Default Assistant";
@@ -683,10 +683,10 @@ export function ChatActions(props: {
     const show = isVisionModel(currentModel);
     setShowUploadImage(show);
     if (!show) {
-      props.setAttachImages([]);
-      props.setUploading(false);
+      setAttachImages([]);
+      setUploading(false);
     }
-  }, [chatStore, currentModel, models]);
+  }, [currentModel, models, setAttachImages, setUploading]);
 
   return (
     <div className={styles["chat-input-actions"]}>

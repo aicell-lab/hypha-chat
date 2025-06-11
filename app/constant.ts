@@ -2,7 +2,7 @@ import { prebuiltAppConfig } from "@mlc-ai/web-llm";
 import { ModelRecord } from "./client/api";
 import { getQuantization, getSize } from "./utils";
 
-export const OWNER = "bioimage-io";
+export const OWNER = "aicell-lab";
 export const REPO = "hypha-chat";
 export const WEBLLM_HOME_URL = "https://agents.bioimage.io";
 export const REPO_URL = `https://github.com/${OWNER}/${REPO}`;

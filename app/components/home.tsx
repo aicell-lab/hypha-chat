@@ -27,8 +27,9 @@ import { SideBar } from "./sidebar";
 import { useAppConfig } from "../store/config";
 import { WebLLMApi } from "../client/webllm";
 import { ModelClient, useChatStore } from "../store";
-import { MLCLLMContext, WebLLMContext } from "../context";
+import { MLCLLMContext, WebLLMContext, HyphaAgentContext } from "../context";
 import { MlcLLMApi } from "../client/mlcllm";
+import { HyphaAgentApi } from "../client/hypha-agent";
 import { useHyphaStore } from "../store/hypha";
 
 export function Loading(props: { noLogo?: boolean }) {
@@ -269,6 +270,24 @@ const useMlcLLM = () => {
   return mlcllm;
 };
 
+const useHyphaAgent = () => {
+  const [hyphaAgent, setHyphaAgent] = useState<HyphaAgentApi | undefined>(
+    undefined,
+  );
+
+  useEffect(() => {
+    const agentApi = new HyphaAgentApi();
+    setHyphaAgent(agentApi);
+
+    // Cleanup function
+    return () => {
+      agentApi.disconnect();
+    };
+  }, []);
+
+  return hyphaAgent;
+};
+
 const useLoadUrlParam = () => {
   const config = useAppConfig();
 
@@ -352,6 +371,8 @@ export function Home() {
   const hasHydrated = useHasHydrated();
   const { webllm, isWebllmActive } = useWebLLM();
   const mlcllm = useMlcLLM();
+  const hyphaAgent = useHyphaAgent();
+  const config = useAppConfig(); // Move this hook call to the top
 
   useSwitchTheme();
   useHtmlLang();
@@ -361,12 +382,24 @@ export function Home() {
   useLogLevel(webllm);
   useInitializeHypha();
 
-  if (!hasHydrated || !webllm || !isWebllmActive) {
+  if (!hasHydrated) {
     return <Loading />;
   }
 
-  if (!isWebllmActive) {
-    return <ErrorScreen message={Locale.ServiceWorker.Error} />;
+  // For HYPHA_AGENT client type, we don't need WebLLM
+  if (config.modelClientType === ModelClient.HYPHA_AGENT) {
+    if (!hyphaAgent) {
+      return <Loading />;
+    }
+  } else {
+    // For other client types, we need WebLLM
+    if (!webllm || !isWebllmActive) {
+      return <Loading />;
+    }
+
+    if (!isWebllmActive) {
+      return <ErrorScreen message={Locale.ServiceWorker.Error} />;
+    }
   }
 
   return (
@@ -374,7 +407,9 @@ export function Home() {
       <Router>
         <WebLLMContext.Provider value={webllm}>
           <MLCLLMContext.Provider value={mlcllm}>
-            <Screen />
+            <HyphaAgentContext.Provider value={hyphaAgent}>
+              <Screen />
+            </HyphaAgentContext.Provider>
           </MLCLLMContext.Provider>
         </WebLLMContext.Provider>
       </Router>

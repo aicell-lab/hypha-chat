@@ -28,6 +28,7 @@ import EditIcon from "../icons/rename.svg";
 import ConfirmIcon from "../icons/confirm.svg";
 import ImageIcon from "../icons/image.svg";
 import BrainIcon from "../icons/brain.svg";
+import AttachmentIcon from "../icons/attachment.svg";
 
 import BottomIcon from "../icons/bottom.svg";
 import StopIcon from "../icons/pause.svg";
@@ -90,9 +91,12 @@ import { ExportMessageModal } from "./exporter";
 import { MultimodalContent } from "../client/api";
 import { Template, useTemplateStore } from "../store/template";
 import Image from "next/image";
-import { MLCLLMContext, WebLLMContext } from "../context";
+import { MLCLLMContext, WebLLMContext, HyphaAgentContext } from "../context";
 import { ChatImage } from "../typing";
 import AgentSelect from "./model-select";
+import { ErrorBoundary } from "./error";
+import { InputRange } from "./input-range";
+
 import { useHyphaStore } from "../store/hypha";
 
 export function ScrollDownToast(prop: { show: boolean; onclick: () => void }) {
@@ -193,6 +197,7 @@ export function SessionConfigModel(props: { onClose: () => void }) {
                   (session) => (session.topic = e.currentTarget.value),
                 )
               }
+              aria-label="Chat topic"
             ></input>
           </ListItem>
           <ListItem title={Locale.Template.Config.Avatar}>
@@ -231,6 +236,7 @@ export function SessionConfigModel(props: { onClose: () => void }) {
                   template.hideContext = e.currentTarget.checked;
                 });
               }}
+              aria-label="Hide context"
             ></input>
           </ListItem>
         </List>
@@ -446,6 +452,171 @@ function ChatAction(props: {
   );
 }
 
+function FileUploadAction() {
+  const {
+    client,
+    defaultProject,
+    user,
+    isConnected,
+    initializeDefaultProject,
+  } = useHyphaStore();
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleClick = async () => {
+    if (!isConnected || !user) {
+      showToast("Please log in to upload files");
+      return;
+    }
+
+    if (!client) {
+      showToast("Client not connected. Please try reconnecting.");
+      return;
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = async (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+
+    // File size limit (10MB)
+    const maxSize = 10 * 1024 * 1024;
+    if (file.size > maxSize) {
+      showToast("File too large. Maximum size is 10MB.");
+      return;
+    }
+
+    try {
+      setIsUploading(true);
+      setUploadProgress(0);
+
+      // Ensure default project exists
+      if (!defaultProject) {
+        setUploadProgress(10);
+        await initializeDefaultProject();
+      }
+
+      // Upload file with progress tracking
+      await uploadFileToProject(file);
+
+      showToast(`File "${file.name}" uploaded successfully!`);
+    } catch (error) {
+      console.error("File upload failed:", error);
+      showToast(
+        `Upload failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const uploadFileToProject = async (file: File): Promise<void> => {
+    if (!client || !defaultProject) {
+      throw new Error("No client connection or default project available");
+    }
+
+    try {
+      console.log("[FileUpload] Uploading file to default project:", file.name);
+
+      // Get artifact manager from client
+      const artifactManager = await client.getService(
+        "public/artifact-manager",
+      );
+
+      // Get presigned URL for upload
+      setUploadProgress(25);
+      const putUrl = await artifactManager.put_file({
+        artifact_id: defaultProject,
+        file_path: file.name,
+        _rkwargs: true,
+      });
+
+      setUploadProgress(50);
+
+      // Upload file
+      const response = await fetch(putUrl, {
+        method: "PUT",
+        body: file,
+        headers: {
+          "Content-Type": "",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload failed with status: ${response.status}`);
+      }
+
+      setUploadProgress(90);
+      console.log("[FileUpload] File uploaded successfully:", file.name);
+    } catch (error) {
+      console.error("[FileUpload] Error uploading file:", error);
+      throw error;
+    }
+  };
+
+  const getText = () => {
+    if (isUploading) {
+      return `Uploading... ${uploadProgress}%`;
+    }
+    return Locale.Chat.InputActions.UploadFile;
+  };
+
+  const getIcon = () => {
+    if (isUploading) {
+      return <LoadingButtonIcon />;
+    }
+    // Use inline SVG attachment icon
+    return (
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.48 16.35a2 2 0 0 1-2.83-2.83l8.36-8.36" />
+      </svg>
+    );
+  };
+
+  return (
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        onChange={handleFileChange}
+        style={{ display: "none" }}
+        accept="*/*"
+        aria-label="Upload file"
+      />
+      <ChatAction onClick={handleClick} text={getText()} icon={getIcon()} />
+    </>
+  );
+}
+
+const INITIALIZATION_SCRIPT = `
+import micropip
+await micropip.install("hypha-rpc")
+print("You should always use python scripts to compute, gather information and do most tasks.\nAlways use <returnToUser> to return results to the user, do not provide plain text answers without wrapped in tags.")
+`;
+
 function useScrollToBottom(
   scrollRef: RefObject<HTMLDivElement>,
   detach: boolean = false,
@@ -500,13 +671,12 @@ export function ChatActions(props: {
 
   // Get display name for current model/agent
   const getCurrentDisplayName = () => {
-    if (config.modelConfig.selectedAgent) {
-      return config.modelConfig.selectedAgent.name;
+    if (config.modelClientType === ModelClient.HYPHA_AGENT) {
+      return config.modelConfig.selectedAgent?.name || "Default Assistant";
     }
-
-    // If it's a regular model, find its display name
-    const model = models.find((m) => m.name === currentModel);
-    return model?.display_name || currentModel;
+    return (
+      models.find((m) => m.name === currentModel)?.display_name || currentModel
+    );
   };
 
   useEffect(() => {
@@ -527,6 +697,7 @@ export function ChatActions(props: {
           icon={props.uploading ? <LoadingButtonIcon /> : <ImageIcon />}
         />
       )}
+      <FileUploadAction />
       <ChatAction
         onClick={props.showPromptSetting}
         text={Locale.Chat.Actions.EditConversation}
@@ -580,6 +751,10 @@ export function ChatActions(props: {
             const agent = resources.find((r) => r.id === agentId);
             const agentName = agent?.manifest.name || agentId;
 
+            // Switch to Hypha Agent client and select agent
+            config.update((config) => {
+              config.modelClientType = ModelClient.HYPHA_AGENT;
+            });
             config.selectAgent(agentId, agentName);
             showToast(`Selected: ${agentName}`);
             setShowModelSelector(false);
@@ -630,11 +805,9 @@ function _Chat() {
   const [attachImages, setAttachImages] = useState<ChatImage[]>([]);
   const [uploading, setUploading] = useState(false);
   const [showEditPromptModal, setShowEditPromptModal] = useState(false);
-  const webllm = useContext(WebLLMContext)!;
-  const mlcllm = useContext(MLCLLMContext)!;
-
-  const llm =
-    config.modelClientType === ModelClient.MLCLLM_API ? mlcllm : webllm;
+  const webllm = useContext(WebLLMContext);
+  const mlcllm = useContext(MLCLLMContext);
+  const hyphaAgent = useContext(HyphaAgentContext);
 
   const models = config.models;
 
@@ -668,9 +841,6 @@ function _Chat() {
     },
   );
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(measure, [userInput]);
-
   // chat commands shortcuts
   const chatCommands = useChatCommand({
     new: () => chatStore.newSession(),
@@ -682,6 +852,208 @@ function _Chat() {
       ),
     del: () => chatStore.deleteSession(chatStore.currentSessionIndex),
   });
+
+  // Track created agents to prevent duplicates
+  const createdAgentsRef = useRef<Set<string>>(new Set());
+
+  // auto grow input effect
+  useEffect(measure, [userInput]);
+
+  // Reset session status on initial loading
+  useEffect(() => {
+    chatStore.resetGeneratingStatus();
+  }, [chatStore]);
+
+  useEffect(() => {
+    chatStore.updateCurrentSession((session) => {
+      const stopTiming = Date.now() - REQUEST_TIMEOUT_MS;
+      session.messages.forEach((m) => {
+        // check if should stop all stale messages
+        if (m.isError || new Date(m.date).getTime() < stopTiming) {
+          if (m.streaming) {
+            m.streaming = false;
+          }
+
+          if (m.content.length === 0) {
+            m.isError = true;
+            m.content = prettyObject({
+              error: true,
+              message: "empty response",
+            });
+          }
+        }
+      });
+      session.messages = session.messages.filter((m) => m.content.length > 0);
+    });
+  }, [chatStore]);
+
+  // Clear created agents when switching client types
+  useEffect(() => {
+    if (config.modelClientType !== ModelClient.HYPHA_AGENT) {
+      createdAgentsRef.current.clear();
+    }
+  }, [config.modelClientType]);
+
+  const context: RenderMessage[] = useMemo(() => {
+    return session.template.hideContext ? [] : session.template.context.slice();
+  }, [session.template.context, session.template.hideContext]);
+
+  // preview messages
+  const renderMessages = useMemo(() => {
+    const contextWithHello =
+      context.length === 0 &&
+      session.messages.at(0)?.content !== BOT_HELLO.content
+        ? [...context, Object.assign({}, BOT_HELLO) as RenderMessage]
+        : context;
+
+    const baseMessages = (contextWithHello as RenderMessage[]).concat(
+      session.messages as RenderMessage[],
+    );
+
+    const previewMessage =
+      userInput.length > 0 && config.sendPreviewBubble
+        ? [
+            {
+              ...createMessage({
+                role: "user",
+                content: userInput,
+              }),
+              preview: true,
+            } as RenderMessage,
+          ]
+        : [];
+
+    return baseMessages.concat(previewMessage);
+  }, [
+    config.sendPreviewBubble,
+    context,
+    session.messages,
+    session.messages.length,
+    userInput,
+  ]);
+
+  const [msgRenderIndex, _setMsgRenderIndex] = useState(
+    Math.max(0, renderMessages.length - CHAT_PAGE_SIZE),
+  );
+
+  function setMsgRenderIndex(newIndex: number) {
+    newIndex = Math.min(renderMessages.length - CHAT_PAGE_SIZE, newIndex);
+    newIndex = Math.max(0, newIndex);
+    _setMsgRenderIndex(newIndex);
+  }
+
+  const messages = useMemo(() => {
+    const endRenderIndex = Math.min(
+      msgRenderIndex + 3 * CHAT_PAGE_SIZE,
+      renderMessages.length,
+    );
+    return renderMessages.slice(msgRenderIndex, endRenderIndex);
+  }, [msgRenderIndex, renderMessages]);
+
+  const autoFocus = !isMobileScreen; // wont auto focus on mobile screen
+  const showMaxIcon = !isMobileScreen;
+
+  const handlePaste = useCallback(
+    async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const currentModel = config.modelConfig.model;
+      if (!isVisionModel(currentModel)) {
+        return;
+      }
+      const items =
+        event.clipboardData.items || (await navigator.clipboard.read());
+      for (const item of items) {
+        if (item.kind === "file" && item.type.startsWith("image/")) {
+          event.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            const images: ChatImage[] = [];
+            images.push(...attachImages);
+            images.push(
+              ...(await new Promise<ChatImage[]>((res, rej) => {
+                setUploading(true);
+                const imagesData: ChatImage[] = [];
+                compressImage(file, 256 * 1024)
+                  .then((imageData) => {
+                    imagesData.push(imageData);
+                    setUploading(false);
+                    res(imagesData);
+                  })
+                  .catch((e) => {
+                    setUploading(false);
+                    rej(e);
+                  });
+              })),
+            );
+            const imagesLength = images.length;
+
+            if (imagesLength > 3) {
+              images.splice(3, imagesLength - 3);
+            }
+            setAttachImages(images);
+          }
+        }
+      }
+    },
+    [attachImages, config.modelConfig.model],
+  );
+
+  // remember unfinished input
+  useEffect(() => {
+    // try to load from local storage
+    const key = UNFINISHED_INPUT(session.id);
+    const mayBeUnfinishedInput = localStorage.getItem(key);
+    if (mayBeUnfinishedInput && userInput.length === 0) {
+      setUserInput(mayBeUnfinishedInput);
+      localStorage.removeItem(key);
+    }
+
+    const dom = inputRef.current;
+    return () => {
+      localStorage.setItem(key, dom?.value ?? "");
+    };
+  }, [session.id, userInput.length]);
+
+  useCommand({
+    fill: setUserInput,
+    submit: (text) => {
+      onSubmit(text);
+    },
+  });
+
+  useEffect(() => {
+    chatStore.updateCurrentSession((session) => {
+      const stopTiming = Date.now() - REQUEST_TIMEOUT_MS;
+      session.messages.forEach((m) => {
+        // check if should stop all stale messages
+        if (m.isError || new Date(m.date).getTime() < stopTiming) {
+          if (m.streaming) {
+            m.streaming = false;
+          }
+
+          if (m.content.length === 0) {
+            m.isError = true;
+            m.content = prettyObject({
+              error: true,
+              message: "empty response",
+            });
+          }
+        }
+      });
+      session.messages = session.messages.filter((m) => m.content.length > 0);
+    });
+  }, [chatStore]);
+
+  const llm =
+    config.modelClientType === ModelClient.MLCLLM_API
+      ? mlcllm
+      : config.modelClientType === ModelClient.HYPHA_AGENT
+        ? hyphaAgent
+        : webllm;
+
+  // Early return if LLM is not available - moved after all hooks
+  if (!llm) {
+    return <div>Loading LLM...</div>;
+  }
 
   // only search prompts when user input is short
   const SEARCH_TEXT_LIMIT = 30;
@@ -748,35 +1120,6 @@ function _Chat() {
     chatStore.stopStreaming();
   };
 
-  // Reset session status on initial loading
-  useEffect(() => {
-    chatStore.resetGeneratingStatus();
-  }, []);
-
-  useEffect(() => {
-    chatStore.updateCurrentSession((session) => {
-      const stopTiming = Date.now() - REQUEST_TIMEOUT_MS;
-      session.messages.forEach((m) => {
-        // check if should stop all stale messages
-        if (m.isError || new Date(m.date).getTime() < stopTiming) {
-          if (m.streaming) {
-            m.streaming = false;
-          }
-
-          if (m.content.length === 0) {
-            m.isError = true;
-            m.content = prettyObject({
-              error: true,
-              message: "empty response",
-            });
-          }
-        }
-      });
-      session.messages = session.messages.filter((m) => m.content.length > 0);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // check if should send message
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // if ArrowUp and no userInput, fill with last input
@@ -794,6 +1137,7 @@ function _Chat() {
       e.preventDefault();
     }
   };
+
   const onRightClick = (e: any, message: ChatMessage) => {
     // copy to clipboard
     if (selectOrCopy(e.currentTarget, getMessageTextContent(message))) {
@@ -871,58 +1215,6 @@ function _Chat() {
     inputRef.current?.focus();
   };
 
-  const context: RenderMessage[] = useMemo(() => {
-    return session.template.hideContext ? [] : session.template.context.slice();
-  }, [session.template.context, session.template.hideContext]);
-
-  if (
-    context.length === 0 &&
-    session.messages.at(0)?.content !== BOT_HELLO.content
-  ) {
-    const copiedHello = Object.assign({}, BOT_HELLO);
-    context.push(copiedHello);
-  }
-
-  // preview messages
-  const renderMessages = useMemo(() => {
-    return context.concat(session.messages as RenderMessage[]).concat(
-      userInput.length > 0 && config.sendPreviewBubble
-        ? [
-            {
-              ...createMessage({
-                role: "user",
-                content: userInput,
-              }),
-              preview: true,
-            },
-          ]
-        : [],
-    );
-  }, [
-    config.sendPreviewBubble,
-    context,
-    session.messages,
-    session.messages.length,
-    userInput,
-  ]);
-
-  const [msgRenderIndex, _setMsgRenderIndex] = useState(
-    Math.max(0, renderMessages.length - CHAT_PAGE_SIZE),
-  );
-  function setMsgRenderIndex(newIndex: number) {
-    newIndex = Math.min(renderMessages.length - CHAT_PAGE_SIZE, newIndex);
-    newIndex = Math.max(0, newIndex);
-    _setMsgRenderIndex(newIndex);
-  }
-
-  const messages = useMemo(() => {
-    const endRenderIndex = Math.min(
-      msgRenderIndex + 3 * CHAT_PAGE_SIZE,
-      renderMessages.length,
-    );
-    return renderMessages.slice(msgRenderIndex, endRenderIndex);
-  }, [msgRenderIndex, renderMessages]);
-
   const onChatBodyScroll = (e: HTMLElement) => {
     const bottomHeight = e.scrollTop + e.clientHeight;
     const edgeThreshold = e.clientHeight;
@@ -954,77 +1246,6 @@ function _Chat() {
     (session.clearContextIndex ?? -1) >= 0
       ? session.clearContextIndex! + context.length - msgRenderIndex
       : -1;
-
-  const autoFocus = !isMobileScreen; // wont auto focus on mobile screen
-  const showMaxIcon = !isMobileScreen;
-
-  useCommand({
-    fill: setUserInput,
-    submit: (text) => {
-      onSubmit(text);
-    },
-  });
-
-  // remember unfinished input
-  useEffect(() => {
-    // try to load from local storage
-    const key = UNFINISHED_INPUT(session.id);
-    const mayBeUnfinishedInput = localStorage.getItem(key);
-    if (mayBeUnfinishedInput && userInput.length === 0) {
-      setUserInput(mayBeUnfinishedInput);
-      localStorage.removeItem(key);
-    }
-
-    const dom = inputRef.current;
-    return () => {
-      localStorage.setItem(key, dom?.value ?? "");
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handlePaste = useCallback(
-    async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const currentModel = config.modelConfig.model;
-      if (!isVisionModel(currentModel)) {
-        return;
-      }
-      const items =
-        event.clipboardData.items || (await navigator.clipboard.read());
-      for (const item of items) {
-        if (item.kind === "file" && item.type.startsWith("image/")) {
-          event.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            const images: ChatImage[] = [];
-            images.push(...attachImages);
-            images.push(
-              ...(await new Promise<ChatImage[]>((res, rej) => {
-                setUploading(true);
-                const imagesData: ChatImage[] = [];
-                compressImage(file, 256 * 1024)
-                  .then((imageData) => {
-                    imagesData.push(imageData);
-                    setUploading(false);
-                    res(imagesData);
-                  })
-                  .catch((e) => {
-                    setUploading(false);
-                    rej(e);
-                  });
-              })),
-            );
-            const imagesLength = images.length;
-
-            if (imagesLength > 3) {
-              images.splice(3, imagesLength - 3);
-            }
-            setAttachImages(images);
-          }
-        }
-      }
-    },
-    [attachImages, chatStore],
-  );
 
   async function uploadImage() {
     const images: ChatImage[] = [];

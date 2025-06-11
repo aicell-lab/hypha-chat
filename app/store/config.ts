@@ -32,6 +32,7 @@ export enum CacheType {
 export enum ModelClient {
   WEBLLM = "webllm",
   MLCLLM_API = "mlc-llm-api",
+  HYPHA_AGENT = "hypha-agent",
 }
 
 export type ModelConfig = {
@@ -128,7 +129,7 @@ export const DEFAULT_CONFIG: ConfigType = {
   enableInjectSystemPrompts: false,
   template: DEFAULT_INPUT_TEMPLATE,
 
-  modelClientType: ModelClient.WEBLLM,
+  modelClientType: ModelClient.HYPHA_AGENT,
   models: DEFAULT_MODELS,
   cacheType: CacheType.Cache,
   logLevel: "INFO",

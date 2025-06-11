@@ -55,6 +55,7 @@ const en = {
       Clear: "Clear Context",
       Settings: "Settings",
       UploadImage: "Upload Images",
+      UploadFile: "Upload File",
     },
     Rename: "Rename Chat",
     Typing: "Typing…",

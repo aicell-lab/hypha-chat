@@ -54,6 +54,9 @@ export function ModelConfigList() {
           <option value={ModelClient.MLCLLM_API} key={ModelClient.MLCLLM_API}>
             {Locale.Settings.ModelClientType.MlcLlm}
           </option>
+          <option value={ModelClient.HYPHA_AGENT} key={ModelClient.HYPHA_AGENT}>
+            Hypha Agent
+          </option>
         </Select>
       </ListItem>
 

@@ -42,6 +42,16 @@ export class WebLLMApi implements LLMApi {
     type: "serviceWorker" | "webWorker",
     logLevel: LogLevel = "WARN",
   ) {
+    // Prevent WebWorker creation during SSR
+    if (typeof window === "undefined") {
+      // Create a dummy handler for SSR
+      this.webllm = {
+        type: "webWorker",
+        engine: null as any,
+      };
+      return;
+    }
+
     const engineConfig = {
       appConfig: {
         ...prebuiltAppConfig,
@@ -71,6 +81,9 @@ export class WebLLMApi implements LLMApi {
   }
 
   private async initModel(onUpdate?: (message: string, chunk: string) => void) {
+    if (typeof window === "undefined" || !this.webllm.engine) {
+      throw Error("WebLLM not available on server side");
+    }
     if (!this.llmConfig) {
       throw Error("llmConfig is undefined");
     }
@@ -82,6 +95,11 @@ export class WebLLMApi implements LLMApi {
   }
 
   async chat(options: ChatOptions): Promise<void> {
+    if (typeof window === "undefined" || !this.webllm.engine) {
+      options.onError?.(new Error("WebLLM not available on server side"));
+      return;
+    }
+
     if (!this.initialized || this.isDifferentConfig(options.config)) {
       this.llmConfig = { ...(this.llmConfig || {}), ...options.config };
       // Check if this is a Qwen3 model with thinking mode enabled

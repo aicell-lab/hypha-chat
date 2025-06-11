@@ -43,6 +43,7 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     isConnecting,
     isConnected,
     disconnect,
+    initializeDefaultProject,
   } = useHyphaStore();
 
   // Add click outside handler to close dropdown
@@ -125,6 +126,14 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
         token: token,
         method_timeout: 180000,
       });
+
+      // Initialize default project after successful connection
+      try {
+        await initializeDefaultProject();
+      } catch (error) {
+        console.warn("Failed to initialize default project:", error);
+        // Don't throw error since login was successful
+      }
     } catch (error) {
       console.error("Error during login:", error);
       localStorage.removeItem("token");
@@ -132,7 +141,7 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     } finally {
       setIsLoggingIn(false);
     }
-  }, [connect]);
+  }, [connect, initializeDefaultProject]);
 
   // Auto-login on component mount if token exists
   useEffect(() => {
@@ -146,6 +155,14 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
             token: token,
             method_timeout: 180000,
           });
+
+          // Initialize default project after successful connection
+          try {
+            await initializeDefaultProject();
+          } catch (error) {
+            console.warn("Failed to initialize default project:", error);
+            // Don't throw error since login was successful
+          }
         } catch (error) {
           console.error("Auto-login failed:", error);
           localStorage.removeItem("token");
@@ -157,14 +174,19 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     };
 
     autoLogin();
-  }, [connect, isConnected, isConnecting]);
+  }, [connect, isConnected, isConnecting, initializeDefaultProject]);
 
+  // Debug effect to log connection state changes
   useEffect(() => {
-    if (server) {
-      setUser(server.config.user);
-      console.log("Logged in as:", server.config.user);
+    if (server && user) {
+      console.log(
+        "Login successful - User:",
+        user.email,
+        "Connected:",
+        isConnected,
+      );
     }
-  }, [server, setUser]);
+  }, [server, user, isConnected]);
 
   return (
     <div className={className}>

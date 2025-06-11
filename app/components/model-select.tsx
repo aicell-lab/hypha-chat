@@ -117,6 +117,9 @@ const AgentSelect: React.FC<AgentSelectProps> = ({
 
   const handleAgentSelect = (agentId: string) => {
     setSelectedAgentId(agentId);
+    // Immediately call onSelectAgent and close the dialog
+    onSelectAgent(agentId);
+    onClose();
   };
 
   const handleConfirmSelection = () => {

@@ -395,7 +395,7 @@ export function ImagePreviewer(props: {
           </div>
 
           <div>
-            <div className={styles["main-title"]}>WebLLM Chat</div>
+            <div className={styles["main-title"]}>Research Navigator</div>
             <div className={styles["sub-title"]}>{window.location.host}</div>
           </div>
           <div>

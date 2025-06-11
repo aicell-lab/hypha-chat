@@ -1,6 +1,6 @@
 {
-  "name": "WebLLM Chat",
-  "short_name": "WebLLMChat",
+  "name": "Research Navigator",
+  "short_name": "Navigator",
   "icons": [
     {
       "src": "/android-chrome-192x192.png",

@@ -809,7 +809,7 @@ function _Chat() {
   const hyphaAgent = useContext(HyphaAgentContext);
 
   const models = config.models;
-  const { resources, isConnected } = useHyphaStore();
+  const { resources, isConnected, user } = useHyphaStore();
 
   // Memoize selected agent resource to prevent unnecessary re-renders
   const selectedAgentResource = useMemo(() => {
@@ -912,7 +912,7 @@ function _Chat() {
     }
 
     // Only proceed if user is connected to Hypha server
-    if (!isConnected) {
+    if (!isConnected || !user) {
       console.log("[Chat] Waiting for Hypha server connection...");
       setIsAgentReady(false);
       return;
@@ -924,8 +924,16 @@ function _Chat() {
 
     const createOrSelectAgent = async () => {
       if (cancelled) return;
-      // Use session ID as agent identifier
-      const agentId = session.id;
+
+      const selectedAgent = config.modelConfig.selectedAgent;
+
+      // Generate composite agent ID based on session and selected agent
+      const agentId =
+        selectedAgent && selectedAgentResource
+          ? `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`
+          : selectedAgent
+            ? `${session.id}@${selectedAgent.id.split("/").pop() || selectedAgent.id}`
+            : session.id; // fallback for default agent
 
       try {
         // Double-check authentication before attempting agent operations
@@ -942,7 +950,7 @@ function _Chat() {
           return;
         }
 
-        // First, try to find an existing agent with this session ID
+        // First, try to find an existing agent with this agent ID
         try {
           const existingAgents = await hyphaAgent.listAgents();
           console.log(
@@ -951,20 +959,7 @@ function _Chat() {
           );
 
           const existingAgent = existingAgents.find((agent) => {
-            // Check if agent ID ends with session ID (for workspace-prefixed IDs)
-            const agentIdMatches =
-              agent.id?.endsWith(session.id) || agent.id?.includes(session.id);
-            // Check if agent name contains session ID
-            const nameMatches = agent.name?.includes(session.id.slice(-8));
-            console.log(
-              "[Chat] Checking agent:",
-              agent.id,
-              "matches ID:",
-              agentIdMatches,
-              "matches name:",
-              nameMatches,
-            );
-            return agentIdMatches || nameMatches;
+            return agent.id.endsWith(":" + agentId);
           });
 
           if (existingAgent) {
@@ -979,16 +974,11 @@ function _Chat() {
             setIsAgentReady(true);
             return;
           } else {
-            console.log(
-              "[Chat] No existing agent found for session:",
-              session.id,
-            );
+            console.log("[Chat] No existing agent found with ID:", agentId);
           }
         } catch (listError) {
           console.warn("[Chat] Could not list existing agents:", listError);
         }
-
-        const selectedAgent = config.modelConfig.selectedAgent;
 
         let agentToCreate: any = null;
 
@@ -996,7 +986,7 @@ function _Chat() {
           if (selectedAgentResource) {
             // Use selected agent configuration with session-based naming
             agentToCreate = {
-              id: session.id,
+              id: agentId,
               name: `${selectedAgentResource.manifest?.name || selectedAgent.name} (${session.id.slice(-8)})`,
               instructions:
                 (selectedAgentResource.manifest as any)?.instructions ||
@@ -1018,7 +1008,7 @@ function _Chat() {
               selectedAgent.id,
             );
             agentToCreate = {
-              id: session.id,
+              id: agentId,
               name: `${selectedAgent.name} (${session.id.slice(-8)})`,
               instructions: "You are a helpful AI assistant.",
               kernelType: "PYTHON",
@@ -1031,7 +1021,7 @@ function _Chat() {
         } else {
           // Create default agent with session-based naming
           agentToCreate = {
-            id: session.id,
+            id: agentId,
             name: `Chat Assistant (${session.id.slice(-8)})`,
             instructions: "You are a helpful AI assistant.",
             kernelType: "PYTHON",
@@ -1060,17 +1050,13 @@ function _Chat() {
           // If agent already exists, try to find and reuse it
           if (createError.message?.includes("already exists")) {
             console.log(
-              "[Chat] Agent already exists, attempting to find and reuse for session:",
-              session.id,
+              "[Chat] Agent already exists, attempting to find and reuse with ID:",
+              agentId,
             );
             try {
               const existingAgents = await hyphaAgent.listAgents();
               const existingAgent = existingAgents.find((agent) => {
-                const agentIdMatches =
-                  agent.id?.endsWith(session.id) ||
-                  agent.id?.includes(session.id);
-                const nameMatches = agent.name?.includes(session.id.slice(-8));
-                return agentIdMatches || nameMatches;
+                return agent.id === agentId;
               });
 
               if (existingAgent) {
@@ -1099,7 +1085,7 @@ function _Chat() {
         // Verify agent is available before marking as created
         try {
           const agents = await hyphaAgent.listAgents();
-          const createdAgent = agents.find((a) => a.id === agent.id);
+          const createdAgent = agents.find((a) => a.id.endsWith(agent.id));
           if (!createdAgent) {
             console.warn(
               "[Chat] Agent not found in list after creation, but proceeding anyway",
@@ -1151,41 +1137,6 @@ function _Chat() {
             "[Chat] Unexpected error during agent creation:",
             error,
           );
-        }
-
-        // If agent creation fails, try to find any existing agent and reuse it
-        try {
-          const existingAgents = await hyphaAgent.listAgents();
-          if (existingAgents.length > 0) {
-            // Use the first available agent as fallback
-            const agent = existingAgents[0];
-            console.log(
-              "[Chat] Using fallback agent:",
-              agent.id,
-              "for session:",
-              session.id,
-            );
-
-            // Use the full agent ID for chat operations
-            hyphaAgent.setAgentId(agent.id);
-
-            // Small delay to ensure the agent connection is stable
-            await new Promise((resolve) => setTimeout(resolve, 500));
-
-            createdAgentsRef.current.add(agentId);
-            setIsAgentReady(true);
-          } else {
-            console.error(
-              "[Chat] No agents available for fallback. User will need to create an agent manually.",
-            );
-            setIsAgentReady(false);
-          }
-        } catch (listError) {
-          console.error(
-            "[Chat] Failed to list agents for fallback:",
-            listError,
-          );
-          setIsAgentReady(false);
         }
       }
     };
@@ -1347,7 +1298,7 @@ function _Chat() {
   if (!llm) {
     if (config.modelClientType === ModelClient.HYPHA_AGENT) {
       // If user is not authenticated, don't show loading - let them see the login interface
-      if (!isConnected) {
+      if (!isConnected || !user) {
         // Continue to render the chat interface which will show login button
       } else {
         // User is authenticated but agent not ready - show loading

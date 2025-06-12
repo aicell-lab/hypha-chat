@@ -950,6 +950,9 @@ function _Chat() {
           return;
         }
 
+        // Mark agent as being created immediately to prevent duplicate creation attempts
+        createdAgentsRef.current.add(agentId);
+
         // First, try to find an existing agent with this agent ID
         try {
           const existingAgents = await hyphaAgent.listAgents();
@@ -1062,7 +1065,6 @@ function _Chat() {
               if (existingAgent) {
                 console.log("[Chat] Found existing agent:", existingAgent.id);
                 hyphaAgent.setAgentId(existingAgent.id);
-                createdAgentsRef.current.add(agentId);
                 setIsAgentReady(true);
                 return;
               }
@@ -1098,7 +1100,6 @@ function _Chat() {
           );
         }
 
-        createdAgentsRef.current.add(agentId);
         setIsAgentReady(true);
         console.log(
           "[Chat] Agent created and selected:",
@@ -1150,6 +1151,15 @@ function _Chat() {
 
     return () => {
       cancelled = true;
+      // Clean up the agent ID from the created set to allow recreation if needed
+      const selectedAgent = config.modelConfig.selectedAgent;
+      const agentId =
+        selectedAgent && selectedAgentResource
+          ? `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`
+          : selectedAgent
+            ? `${session.id}@${selectedAgent.id.split("/").pop() || selectedAgent.id}`
+            : session.id;
+      createdAgentsRef.current.delete(agentId);
     };
   }, [
     config.modelClientType,

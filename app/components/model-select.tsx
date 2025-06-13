@@ -67,15 +67,21 @@ const AgentSelect: React.FC<AgentSelectProps> = ({
   selectedAgent,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
     selectedAgent || null,
   );
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const { resources, fetchResources, totalItems, itemsPerPage } =
     useHyphaStore();
+
+  // Filter agents to only show type 'agent'
+  const agentResources = resources.filter((resource) =>
+    resource.manifest.type?.includes("agent"),
+  );
 
   // Debounced search
   const debouncedSearch = useCallback((query: string) => {
@@ -89,19 +95,36 @@ const AgentSelect: React.FC<AgentSelectProps> = ({
   const loadAgents = useCallback(
     async (pageNum: number, searchQuery?: string) => {
       try {
-        setLoading(true);
+        // Only show loading state if we don't have resources yet, or if it's a new search
+        const shouldShowLoading =
+          agentResources.length === 0 ||
+          (searchQuery !== undefined && pageNum === 1);
+        if (shouldShowLoading) {
+          setLoading(true);
+        }
+
         await fetchResources(pageNum, searchQuery);
+
+        if (isInitialLoad) {
+          setIsInitialLoad(false);
+        }
       } catch (error) {
         console.error("Failed to fetch agents:", error);
       } finally {
         setLoading(false);
       }
     },
-    [fetchResources],
+    [fetchResources, agentResources.length, isInitialLoad],
   );
 
   useEffect(() => {
-    loadAgents(1);
+    // Only fetch if we don't have resources yet
+    if (agentResources.length === 0) {
+      loadAgents(1);
+    } else {
+      // We already have resources, mark as not initial load
+      setIsInitialLoad(false);
+    }
   }, [loadAgents]);
 
   useEffect(() => {
@@ -138,10 +161,12 @@ const AgentSelect: React.FC<AgentSelectProps> = ({
   const totalPages = Math.ceil(totalItems / itemsPerPage);
   const hasMore = page < totalPages;
 
-  // Filter agents to only show type 'agent'
-  const agentResources = resources.filter((resource) =>
-    resource.manifest.type?.includes("agent"),
-  );
+  // Determine what to show in the content area
+  const shouldShowLoading =
+    loading && (agentResources.length === 0 || isInitialLoad);
+  const shouldShowEmpty =
+    !loading && agentResources.length === 0 && !isInitialLoad;
+  const shouldShowGrid = agentResources.length > 0;
 
   return (
     <div className="screen-model-container">
@@ -155,11 +180,11 @@ const AgentSelect: React.FC<AgentSelectProps> = ({
         </div>
 
         <div className={style["agent-list-container"]}>
-          {loading && page === 1 ? (
+          {shouldShowLoading ? (
             <LoadingSpinner />
-          ) : agentResources.length === 0 ? (
+          ) : shouldShowEmpty ? (
             <EmptyState searchTerm={searchTerm} />
-          ) : (
+          ) : shouldShowGrid ? (
             <div className={style["agent-grid"]}>
               {agentResources.map((resource) => (
                 <ResourceCard
@@ -170,7 +195,7 @@ const AgentSelect: React.FC<AgentSelectProps> = ({
                 />
               ))}
             </div>
-          )}
+          ) : null}
 
           {/* Load More Button */}
           {hasMore && !loading && agentResources.length > 0 && (

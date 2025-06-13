@@ -5,6 +5,7 @@ import RemarkBreaks from "remark-breaks";
 import RehypeKatex from "rehype-katex";
 import RemarkGfm from "remark-gfm";
 import RehypeHighlight from "rehype-highlight";
+import rehypeRaw from "rehype-raw";
 import { useRef, useState, RefObject, useEffect, useMemo } from "react";
 import { copyToClipboard } from "../utils";
 import mermaid from "mermaid";
@@ -145,6 +146,7 @@ function _MarkDownContent(props: { content: string }) {
       remarkPlugins={[RemarkMath, RemarkGfm, RemarkBreaks] as PluggableList}
       rehypePlugins={
         [
+          rehypeRaw, // Allow HTML tags like <details> and <summary>
           RehypeKatex,
           [
             RehypeHighlight,
@@ -155,16 +157,178 @@ function _MarkDownContent(props: { content: string }) {
           ],
         ] as PluggableList
       }
-      components={{
-        pre: PreCode as any,
-        p: (pProps) => <p {...pProps} dir="auto" />,
-        a: (aProps) => {
-          const href = aProps.href || "";
-          const isInternal = /^\/#/i.test(href);
-          const target = isInternal ? "_self" : aProps.target ?? "_blank";
-          return <a {...aProps} target={target} />;
-        },
-      }}
+      components={
+        {
+          pre: PreCode as any,
+          p: (pProps: any) => <p {...pProps} dir="auto" />,
+          a: (aProps: any) => {
+            const href = aProps.href || "";
+            const isInternal = /^\/#/i.test(href);
+            const target = isInternal ? "_self" : aProps.target ?? "_blank";
+            return <a {...aProps} target={target} />;
+          },
+          // Custom renderer for <thoughts> tag
+          thoughts: (props: any) => (
+            <span
+              className="thoughts-container"
+              style={{
+                display: "block",
+                backgroundColor: "var(--color-canvas-subtle)",
+                border: "1px solid var(--color-border-default)",
+                borderRadius: "8px",
+                padding: "12px 16px",
+                margin: "16px 0",
+                fontStyle: "italic",
+                opacity: 0.8,
+                position: "relative",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  color: "var(--color-fg-muted)",
+                  marginBottom: "8px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                }}
+              >
+                💭 Thoughts
+              </span>
+              <span style={{ display: "block" }} {...props} />
+            </span>
+          ),
+          // Custom renderer for <thinking> tag (similar to thoughts)
+          thinking: (props: any) => (
+            <span
+              className="thinking-container"
+              style={{
+                display: "block",
+                backgroundColor: "var(--color-canvas-subtle)",
+                border: "1px solid var(--color-border-default)",
+                borderRadius: "8px",
+                padding: "12px 16px",
+                margin: "16px 0",
+                fontStyle: "italic",
+                opacity: 0.8,
+                borderLeft: "4px solid var(--color-accent-fg)",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  color: "var(--color-fg-muted)",
+                  marginBottom: "8px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                }}
+              >
+                🤔 Thinking
+              </span>
+              <span style={{ display: "block" }} {...props} />
+            </span>
+          ),
+          // Custom renderer for <py-script> tag
+          "py-script": (props: any) => {
+            const content = props.children || "";
+            return (
+              <div
+                className="py-script-container"
+                style={{
+                  display: "block",
+                  margin: "16px 0",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontSize: "12px",
+                    fontWeight: "bold",
+                    color: "var(--color-fg-muted)",
+                    marginBottom: "8px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  🐍 Python Script
+                </div>
+                <PreCode>
+                  <code className="language-python">{content}</code>
+                </PreCode>
+              </div>
+            );
+          },
+          // Custom renderer for <t-script> tag
+          "t-script": (props: any) => {
+            const content = props.children || "";
+            return (
+              <div
+                className="t-script-container"
+                style={{
+                  display: "block",
+                  margin: "16px 0",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontSize: "12px",
+                    fontWeight: "bold",
+                    color: "var(--color-fg-muted)",
+                    marginBottom: "8px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  📘 TypeScript
+                </div>
+                <PreCode>
+                  <code className="language-typescript">{content}</code>
+                </PreCode>
+              </div>
+            );
+          },
+          // Custom renderer for <javascript> tag
+          javascript: (props: any) => {
+            const content = props.children || "";
+            return (
+              <div
+                className="javascript-container"
+                style={{
+                  display: "block",
+                  margin: "16px 0",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontSize: "12px",
+                    fontWeight: "bold",
+                    color: "var(--color-fg-muted)",
+                    marginBottom: "8px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.5px",
+                  }}
+                >
+                  💛 JavaScript
+                </div>
+                <PreCode>
+                  <code className="language-javascript">{content}</code>
+                </PreCode>
+              </div>
+            );
+          },
+        } as any
+      }
     >
       {escapedContent}
     </ReactMarkdown>

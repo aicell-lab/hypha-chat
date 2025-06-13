@@ -685,6 +685,8 @@ export function ChatActions(props: {
           }}
           selectedAgent={config.modelConfig.selectedAgent?.id}
           onSelectAgent={(agentId: string) => {
+            console.log("[Chat] Agent selected in dialog:", agentId);
+
             // Find the agent resource from resources
             const agent = resources.find((r: any) => r.id === agentId);
             if (!agent) {
@@ -692,11 +694,20 @@ export function ChatActions(props: {
               return;
             }
 
+            console.log("[Chat] Found agent resource:", agent.manifest.name);
+
             // Switch to Hypha Agent client and select agent
             config.update((config) => {
               config.modelClientType = ModelClient.HYPHA_AGENT;
             });
             config.selectAgent(agentId, agent.manifest.name);
+
+            console.log("[Chat] Agent selection complete:", {
+              agentId,
+              name: agent.manifest.name,
+              selectedAgent: config.modelConfig.selectedAgent,
+            });
+
             showToast(`Selected: ${agent.manifest.name}`);
             setShowModelSelector(false);
           }}
@@ -765,6 +776,19 @@ function _Chat() {
 
   // Track agent readiness for Hypha Agent client
   const [isAgentReady, setIsAgentReady] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+
+  // Reset agent state when selected agent changes
+  useEffect(() => {
+    if (config.modelClientType === ModelClient.HYPHA_AGENT) {
+      console.log(
+        "[Chat] Resetting agent state for new selection:",
+        config.modelConfig.selectedAgent?.id,
+      );
+      setIsAgentReady(false);
+      setAgentError(null);
+    }
+  }, [config.modelConfig.selectedAgent?.id, config.modelClientType]);
 
   // prompt hints
   const promptStore = usePromptStore();
@@ -874,6 +898,7 @@ function _Chat() {
   useEffect(() => {
     if (config.modelClientType !== ModelClient.HYPHA_AGENT || !hyphaAgent) {
       setIsAgentReady(config.modelClientType !== ModelClient.HYPHA_AGENT);
+      setAgentError(null);
       return;
     }
 
@@ -881,7 +906,18 @@ function _Chat() {
     if (!isConnected || !user) {
       console.log("[Chat] Waiting for Hypha server connection...");
       setIsAgentReady(false);
+      setAgentError(null);
       return;
+    }
+
+    // Early exit if agent is already ready and there's no error,
+    // but only if we have the correct agent selected
+    if (isAgentReady && !agentError && selectedAgentResource) {
+      // Check if we have the right agent ID set
+      const expectedAgentId = `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`;
+      if (hyphaAgent.getAgentId()?.endsWith(expectedAgentId)) {
+        return;
+      }
     }
 
     // If we have a selectedAgent but no selectedAgentResource and resources is not empty,
@@ -926,6 +962,7 @@ function _Chat() {
       }
 
       setIsAgentReady(false);
+      setAgentError(null);
       return;
     }
 
@@ -933,10 +970,18 @@ function _Chat() {
 
     const createOrFindAgent = async () => {
       try {
+        // Clear any previous errors
+        setAgentError(null);
+
         // Generate the expected agent ID based on session and selected agent resource
         const agentId = `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`;
 
         console.log("[Chat] Looking for or creating agent:", agentId);
+        console.log("[Chat] Current agent ID:", hyphaAgent.getAgentId());
+        console.log(
+          "[Chat] Selected agent resource:",
+          selectedAgentResource.id,
+        );
 
         // Check if we already created this specific agent
         if (createdAgentsRef.current[agentId]) {
@@ -1033,14 +1078,71 @@ function _Chat() {
 
         hyphaAgent.setAgentId(newAgent.id);
         createdAgentsRef.current[agentId] = true;
+
+        // Add a small delay to allow agent to fully initialize and check if it's working
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Verify the agent is still alive and working
+        try {
+          const checkAgents = await hyphaAgent.listAgents();
+          const stillExists = checkAgents.find((a) => a.id === newAgent.id);
+          if (!stillExists) {
+            throw new Error(
+              "Agent disappeared after creation, likely due to startup script failure",
+            );
+          }
+          console.log("[Chat] Agent verified as working:", newAgent.id);
+        } catch (verifyError) {
+          console.error("[Chat] Agent verification failed:", verifyError);
+          // Clear from cache since it failed
+          delete createdAgentsRef.current[agentId];
+          throw new Error(
+            `Agent created but failed to start properly: ${verifyError}`,
+          );
+        }
+
         if (!cancelled) setIsAgentReady(true);
       } catch (error) {
         console.error("[Chat] Failed to create/find agent:", error);
         if (!cancelled) {
           setIsAgentReady(false);
-          showToast(
-            `Failed to initialize agent: ${error instanceof Error ? error.message : "Unknown error"}`,
-          );
+
+          // Set error message to be displayed in UI with more specific error details
+          let errorMessage = "Unknown error";
+          let specificError = "";
+
+          if (error instanceof Error) {
+            errorMessage = error.message;
+
+            // Categorize common error types
+            if (
+              errorMessage.includes("Service") &&
+              errorMessage.includes("not found")
+            ) {
+              specificError =
+                "The agent service is not available. Please contact support or try again later.";
+            } else if (
+              errorMessage.includes("authentication") ||
+              errorMessage.includes("token")
+            ) {
+              specificError = "Authentication failed. Please log in again.";
+            } else if (errorMessage.includes("timeout")) {
+              specificError =
+                "Connection timeout. Please check your network and try again.";
+            } else if (
+              errorMessage.includes("createAgent") &&
+              errorMessage.includes("not available")
+            ) {
+              specificError =
+                "Agent creation service is currently unavailable. Please try again later.";
+            } else {
+              specificError = errorMessage;
+            }
+          } else {
+            specificError = String(error);
+          }
+
+          setAgentError(`Failed to initialize AI agent: ${specificError}`);
         }
       }
     };
@@ -1057,8 +1159,10 @@ function _Chat() {
     session.id,
     isConnected,
     user,
-    resources,
+    resources.length, // Use length instead of the array to reduce re-renders
     config.modelConfig.selectedAgent?.id,
+    isAgentReady,
+    // Removed agentError from dependencies to prevent infinite re-runs
   ]);
 
   const context: RenderMessage[] = useMemo(() => {
@@ -1485,6 +1589,43 @@ function _Chat() {
           </div>
           <div className="window-header-sub-title">
             {Locale.Chat.SubTitle(session.messages.length)}
+
+            {/* Agent Status Indicator for Hypha Agent */}
+            {config.modelClientType === ModelClient.HYPHA_AGENT && user && (
+              <span
+                style={{
+                  marginLeft: "8px",
+                  padding: "2px 6px",
+                  borderRadius: "8px",
+                  fontSize: "10px",
+                  fontWeight: "500",
+                  backgroundColor: agentError
+                    ? "#fef2f2"
+                    : isAgentReady
+                      ? "#f0fdf4"
+                      : "#fef3c7",
+                  color: agentError
+                    ? "#dc2626"
+                    : isAgentReady
+                      ? "#16a34a"
+                      : "#d97706",
+                  border: `1px solid ${agentError ? "#fecaca" : isAgentReady ? "#bbf7d0" : "#fed7aa"}`,
+                }}
+                title={
+                  agentError
+                    ? `Agent Error: ${agentError}`
+                    : isAgentReady
+                      ? "Agent is ready"
+                      : "Agent is starting up"
+                }
+              >
+                {agentError
+                  ? "🔴 Agent Error"
+                  : isAgentReady
+                    ? "🟢 Agent Ready"
+                    : "🟡 Starting..."}
+              </span>
+            )}
           </div>
         </div>
         <div className="window-actions">
@@ -1568,9 +1709,9 @@ function _Chat() {
             fullWidth
           />
         </div>
+        {/* Agent status display - Show for HYPHA_AGENT client when agent is not ready OR when there's an error */}
         {config.modelClientType === ModelClient.HYPHA_AGENT &&
-          isConnected &&
-          !isAgentReady && (
+          (!isAgentReady || agentError) && (
             <div className={styles["chat-message"]}>
               <div className={styles["chat-message-container"]}>
                 <div className={styles["chat-message-header"]}>
@@ -1580,16 +1721,157 @@ function _Chat() {
                   <div className={styles["chat-message-role-name"]}>System</div>
                 </div>
                 <div className={styles["chat-message-item"]}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                    }}
-                  >
-                    <LoadingIcon />
-                    <span>Setting up your AI agent, please wait...</span>
-                  </div>
+                  {agentError ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "12px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: "8px",
+                          color: "#ef4444",
+                        }}
+                      >
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{ minWidth: "16px", marginTop: "2px" }}
+                        >
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="15" y1="9" x2="9" y2="15" />
+                          <line x1="9" y1="9" x2="15" y2="15" />
+                        </svg>
+                        <span>{agentError}</span>
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "8px",
+                          marginTop: "8px",
+                        }}
+                      >
+                        <button
+                          onClick={async () => {
+                            // Clear the error and retry
+                            setAgentError(null);
+                            setIsAgentReady(false);
+
+                            // Clear local cache and destroy existing agent for clean retry
+                            if (selectedAgentResource && hyphaAgent) {
+                              const agentId = `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`;
+
+                              // Clear local cache
+                              delete createdAgentsRef.current[agentId];
+
+                              // Destroy existing agent on server for clean slate
+                              try {
+                                const existingAgents =
+                                  await hyphaAgent.listAgents();
+                                const existingAgent = existingAgents.find((a) =>
+                                  a.id.endsWith(agentId),
+                                );
+                                if (existingAgent) {
+                                  console.log(
+                                    "[Chat] Destroying existing agent for retry:",
+                                    existingAgent.id,
+                                  );
+                                  await hyphaAgent.destroyAgent(
+                                    existingAgent.id,
+                                  );
+                                }
+                              } catch (error) {
+                                console.warn(
+                                  "[Chat] Failed to destroy existing agent:",
+                                  error,
+                                );
+                                // Don't block retry if destruction fails
+                              }
+
+                              // Reset HyphaAgent state (will be set when new agent is created)
+                              // hyphaAgent.setAgentId(null); // Skip this - let the new agent creation set the ID
+                            }
+
+                            // The useEffect will automatically retry with a clean slate
+                          }}
+                          style={{
+                            padding: "6px 12px",
+                            backgroundColor: "#3b82f6",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "4px",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                          }}
+                        >
+                          Retry
+                        </button>
+                        <button
+                          onClick={() => {
+                            setAgentError(null);
+                          }}
+                          style={{
+                            padding: "6px 12px",
+                            backgroundColor: "#6b7280",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "4px",
+                            cursor: "pointer",
+                            fontSize: "12px",
+                          }}
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  ) : !isConnected || !user ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        color: "#f59e0b",
+                      }}
+                    >
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ minWidth: "16px" }}
+                      >
+                        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                        <path d="M12 9v4" />
+                        <path d="m12 17 .01 0" />
+                      </svg>
+                      <span>Please log in to use AI agents</span>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <LoadingIcon />
+                      <span>Setting up your AI agent, please wait...</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

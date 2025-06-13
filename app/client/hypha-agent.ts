@@ -53,12 +53,14 @@ export interface ChatResponse {
     | "text_chunk"
     | "error"
     | "function_call"
-    | "function_call_output";
+    | "function_call_output"
+    | "new_completion";
   content?: string;
   error?: string;
   name?: string;
   arguments?: any;
   call_id?: string;
+  completion_id?: string;
 }
 
 export class HyphaAgentApi implements LLMApi {
@@ -223,14 +225,24 @@ export class HyphaAgentApi implements LLMApi {
         });
         if (existingAgent) {
           log.info(
-            "[HyphaAgent] Agent already exists, reusing:",
+            "[HyphaAgent] Found existing agent, but destroying it to ensure clean state:",
             existingAgent.id,
           );
-          this.agentId = existingAgent.id;
-          return existingAgent;
+          // Always destroy existing agent to avoid reusing potentially broken agents
+          try {
+            await this.service.destroyAgent({ agentId: existingAgent.id });
+            log.info("[HyphaAgent] Existing agent destroyed successfully");
+          } catch (destroyError) {
+            log.warn(
+              "[HyphaAgent] Failed to destroy existing agent:",
+              destroyError,
+            );
+            // Continue with creation anyway
+          }
         }
       } catch (listError) {
         log.warn("[HyphaAgent] Failed to check existing agents:", listError);
+        // Don't throw here - continue with creation attempt
       }
 
       log.info("[HyphaAgent] Creating new agent:", config.id);
@@ -239,25 +251,110 @@ export class HyphaAgentApi implements LLMApi {
       const agent = await this.service.createAgent(config);
       this.agentId = agent.id;
       log.info("[HyphaAgent] Agent created successfully:", agent.id);
-      return agent;
-    } catch (error: any) {
-      log.error("[HyphaAgent] Failed to create agent:", error);
 
-      // Check if this is a startup script error
-      const errorMessage =
-        error?.message || error?.toString() || "Unknown error";
-      if (
-        errorMessage.includes("Startup script failed") ||
-        errorMessage.includes("SyntaxError") ||
-        errorMessage.includes("unterminated string")
-      ) {
-        log.error(
-          "[HyphaAgent] Startup script error detected. This may be due to script formatting issues.",
+      // Wait a moment for the agent to fully initialize and check for startup errors
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Verify the agent is actually working by listing agents again
+      try {
+        const verifyAgents = await this.service.listAgents();
+        const createdAgent = verifyAgents.find(
+          (a: AgentInfo) => a.id === agent.id,
         );
-        log.error("[HyphaAgent] Startup script content:", config.startupScript);
+        if (!createdAgent) {
+          throw new Error(
+            "Agent was created but disappeared immediately, indicating a startup failure",
+          );
+        }
+        log.info("[HyphaAgent] Agent verified and working:", agent.id);
+      } catch (verifyError) {
+        log.error("[HyphaAgent] Agent verification failed:", verifyError);
+        // If verification fails, the agent might have startup issues
+        throw new Error(
+          `Agent created but failed verification: ${verifyError}`,
+        );
       }
 
-      throw error;
+      return agent;
+    } catch (error: any) {
+      // Enhanced error logging and processing
+      let errorMessage = "Unknown error";
+      let errorDetails = "";
+
+      try {
+        if (error && typeof error === "object") {
+          if ("message" in error && typeof error.message === "string") {
+            errorMessage = error.message;
+          } else if ("error" in error && typeof error.error === "string") {
+            errorMessage = error.error;
+          }
+
+          // Try to extract additional details
+          if ("details" in error) {
+            errorDetails = JSON.stringify(error.details);
+          } else if ("stack" in error) {
+            errorDetails = error.stack;
+          }
+        } else if (typeof error === "string") {
+          errorMessage = error;
+        }
+      } catch (parseError) {
+        log.warn("[HyphaAgent] Error parsing error object:", parseError);
+      }
+
+      // Log detailed error information
+      log.error("[HyphaAgent] Failed to create agent:", {
+        message: errorMessage,
+        details: errorDetails,
+        configId: config.id,
+        originalError: error,
+      });
+
+      // Create a more informative error for the UI
+      let uiErrorMessage = errorMessage;
+
+      // Categorize common error patterns
+      if (
+        errorMessage.toLowerCase().includes("service not found") ||
+        (errorMessage.toLowerCase().includes("service") &&
+          errorMessage.toLowerCase().includes("not available"))
+      ) {
+        uiErrorMessage =
+          "Agent service is not available. The backend service may be down or not properly configured.";
+      } else if (errorMessage.toLowerCase().includes("timeout")) {
+        uiErrorMessage =
+          "Request timed out. The agent service may be overloaded or experiencing issues.";
+      } else if (
+        errorMessage.toLowerCase().includes("permission") ||
+        errorMessage.toLowerCase().includes("unauthorized") ||
+        errorMessage.toLowerCase().includes("forbidden")
+      ) {
+        uiErrorMessage =
+          "Permission denied. You may not have access to create agents with this configuration.";
+      } else if (
+        errorMessage.toLowerCase().includes("invalid") &&
+        errorMessage.toLowerCase().includes("config")
+      ) {
+        uiErrorMessage =
+          "Invalid agent configuration. Please try selecting a different agent.";
+      } else if (
+        errorMessage.toLowerCase().includes("quota") ||
+        errorMessage.toLowerCase().includes("limit")
+      ) {
+        uiErrorMessage =
+          "Resource limit reached. Please try again later or contact support.";
+      } else if (
+        errorMessage.toLowerCase().includes("network") ||
+        errorMessage.toLowerCase().includes("connection")
+      ) {
+        uiErrorMessage =
+          "Network connection issue. Please check your internet connection and try again.";
+      }
+
+      // Throw the processed error
+      const processedError = new Error(uiErrorMessage);
+      processedError.name = "AgentCreationError";
+      throw processedError;
     }
   }
 
@@ -334,6 +431,15 @@ export class HyphaAgentApi implements LLMApi {
     let accumulatedContent = "";
     let stopReason: ChatCompletionFinishReason | undefined;
     let usage: CompletionUsage | undefined;
+
+    // Track function executions for detailed summary
+    const functionExecutions: Array<{
+      name: string;
+      args: any;
+      callId: string;
+      output?: string;
+      timestamp: number;
+    }> = [];
 
     try {
       log.info("[HyphaAgent] Starting chat with agent:", this.agentId);
@@ -419,6 +525,63 @@ export class HyphaAgentApi implements LLMApi {
         } else if (chunk.type === "text" && chunk.content) {
           accumulatedContent = chunk.content;
           options.onUpdate?.(accumulatedContent, chunk.content);
+        } else if (chunk.type === "function_call") {
+          // Code execution is starting
+          const functionName = chunk.name || "unknown_function";
+          const callId = chunk.call_id || `call_${Date.now()}`;
+
+          // Add emoji-enhanced function call to accumulated content
+          const executionMessage = `\n\n🚀 **Executing ${functionName}**\n`;
+          accumulatedContent += executionMessage;
+          options.onUpdate?.(accumulatedContent, executionMessage);
+
+          // Track function execution
+          functionExecutions.push({
+            name: functionName,
+            args: chunk.arguments,
+            callId: callId,
+            timestamp: Date.now(),
+          });
+
+          // Call the callback if provided
+          options.onFunctionCall?.(chunk.name, chunk.arguments, chunk.call_id);
+
+          console.log(
+            `🚀 Executing ${chunk.name} with call_id: ${chunk.call_id}`,
+          );
+        } else if (chunk.type === "function_call_output") {
+          // Code execution completed with results
+          const callId = chunk.call_id || "";
+          const output = chunk.content || "";
+
+          // Find the corresponding function execution
+          const execution = functionExecutions.find(
+            (exec) => exec.callId === callId,
+          );
+          if (execution) {
+            execution.output = output;
+          }
+
+          // Add execution completion to accumulated content
+          const completionMessage = `\n✅ **Execution completed**\n\n`;
+          accumulatedContent += completionMessage;
+          options.onUpdate?.(accumulatedContent, completionMessage);
+
+          // Call the callback if provided
+          options.onFunctionOutput?.(chunk.content, chunk.call_id);
+
+          console.log(
+            `📤 Function output for ${chunk.call_id}:`,
+            chunk.content,
+          );
+        } else if (chunk.type === "new_completion") {
+          // New completion round starting
+          options.onUpdate?.(accumulatedContent, "🤔 Thinking...");
+
+          // Call the callback if provided
+          options.onNewCompletion?.(chunk.completion_id);
+
+          console.log(`🔄 New completion started: ${chunk.completion_id}`);
         }
       }
 
@@ -429,7 +592,16 @@ export class HyphaAgentApi implements LLMApi {
           acc + (typeof msg.content === "string" ? msg.content.length : 0),
         0,
       );
-      const completionTokens = accumulatedContent.length;
+
+      // Add function execution summary if there were any function calls
+      let finalContent = accumulatedContent;
+      if (functionExecutions.length > 0) {
+        const executionSummary =
+          this.formatFunctionExecutionSummary(functionExecutions);
+        finalContent += executionSummary;
+      }
+
+      const completionTokens = finalContent.length;
 
       usage = {
         prompt_tokens: promptTokens,
@@ -444,8 +616,8 @@ export class HyphaAgentApi implements LLMApi {
         },
       };
 
-      if (accumulatedContent && !this.abortController?.signal.aborted) {
-        options.onFinish(accumulatedContent, stopReason, usage);
+      if (finalContent && !this.abortController?.signal.aborted) {
+        options.onFinish(finalContent, stopReason, usage);
       }
     } catch (error: any) {
       if (
@@ -534,5 +706,61 @@ export class HyphaAgentApi implements LLMApi {
     // Reset connection state to force re-initialization with new provider
     this.server = null;
     this.isConnected = false;
+  }
+
+  // Format function execution summary as collapsible markdown with proper spacing
+  private formatFunctionExecutionSummary(
+    executions: Array<{
+      name: string;
+      args: any;
+      callId: string;
+      output?: string;
+      timestamp: number;
+    }>,
+  ): string {
+    if (executions.length === 0) return "";
+
+    let summary = "";
+    summary += `<details>\n\n<summary>🔧 Function Executions(${executions.length} ${executions.length === 1 ? "call" : "calls"})</summary>\n\n`;
+
+    executions.forEach((execution, index) => {
+      const duration = execution.output ? "✅ completed" : "⏳ in progress";
+      const timestamp = new Date(execution.timestamp).toLocaleTimeString();
+
+      summary += `### ${index + 1}. \`${execution.name}\`\n\n`;
+      summary += `- **Call ID:** \`${execution.callId}\`\n`;
+      summary += `- **Time:** ${timestamp}\n`;
+      summary += `- **Status:** ${duration}\n\n`;
+
+      if (execution.args && Object.keys(execution.args).length > 0) {
+        summary += `**Arguments:**\n\n`;
+        summary += "```json\n";
+        summary += JSON.stringify(execution.args, null, 2);
+        summary += "\n```\n\n";
+      }
+
+      if (execution.output) {
+        summary += `**Output:**\n\n`;
+        // Try to detect if output is JSON and format it nicely
+        try {
+          const parsedOutput = JSON.parse(execution.output);
+          summary += "```json\n";
+          summary += JSON.stringify(parsedOutput, null, 2);
+          summary += "\n```\n\n";
+        } catch {
+          // If not JSON, display as plain text with code formatting
+          summary += "```\n";
+          summary += execution.output;
+          summary += "\n```\n\n";
+        }
+      }
+
+      if (index < executions.length - 1) {
+        summary += "---\n\n";
+      }
+    });
+
+    summary += "\n</details>\n\n";
+    return summary;
   }
 }

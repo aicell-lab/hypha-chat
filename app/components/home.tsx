@@ -469,10 +469,29 @@ export function Home() {
 
   // For HYPHA_AGENT client type, we don't need WebLLM
   if (config.modelClientType === ModelClient.HYPHA_AGENT) {
-    // Only show loading if user is authenticated but hyphaAgent is not ready
-    if (user && isConnected && !hyphaAgent) {
-      return <Loading />;
+    // Clean up expired tokens first
+    const token = localStorage.getItem("token");
+    const tokenExpiry = localStorage.getItem("tokenExpiry");
+
+    if (token && tokenExpiry) {
+      try {
+        const expiryDate = new Date(tokenExpiry);
+        if (expiryDate <= new Date()) {
+          // Token is expired, clear it
+          localStorage.removeItem("token");
+          localStorage.removeItem("tokenExpiry");
+          localStorage.removeItem("user");
+        }
+      } catch (error) {
+        // Invalid date format, clear tokens
+        localStorage.removeItem("token");
+        localStorage.removeItem("tokenExpiry");
+        localStorage.removeItem("user");
+      }
     }
+
+    // Always show the interface - don't show loading for HYPHA_AGENT
+    // Users can interact with the chat and log in as needed
   } else {
     // For other client types, we need WebLLM
     if (!webllm || !isWebllmActive) {

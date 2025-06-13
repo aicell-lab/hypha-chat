@@ -47,6 +47,9 @@ export interface ChatOptions {
     usage?: CompletionUsage,
   ) => void;
   onError?: (err: Error) => void;
+  onFunctionCall?: (name?: string, args?: any, callId?: string) => void;
+  onFunctionOutput?: (content?: string, callId?: string) => void;
+  onNewCompletion?: (completionId?: string) => void;
 }
 
 export interface LLMUsage {

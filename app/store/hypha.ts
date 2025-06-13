@@ -41,16 +41,13 @@ export interface Resource {
 }
 
 export interface HyphaState {
-  client: any | null;
   user: User | null;
-  server: any;
   isConnecting: boolean;
   isConnected: boolean;
   resources: Resource[];
   resourceType: string | null;
   totalItems: number;
   itemsPerPage: number;
-  artifactManager: any | null;
   defaultProject: string | null;
 }
 
@@ -66,16 +63,13 @@ interface LoginConfig {
 }
 
 const DEFAULT_HYPHA_STATE: HyphaState = {
-  client: null,
   user: null,
-  server: null,
   isConnecting: false,
   isConnected: false,
   resources: [],
   resourceType: "agent",
   totalItems: 0,
   itemsPerPage: 12,
-  artifactManager: null,
   defaultProject: null,
 };
 
@@ -83,48 +77,137 @@ const DEFAULT_HYPHA_STATE: HyphaState = {
 const SITE_ID = "hypha-agents";
 const SERVER_URL = "https://hypha.aicell.io";
 
-// Move token logic outside of component
+// Simple token handling with automatic expiration cleanup
 const getSavedToken = () => {
   if (typeof window === "undefined") return null;
 
   const token = localStorage.getItem("token");
-  if (token) {
-    const tokenExpiry = localStorage.getItem("tokenExpiry");
-    if (tokenExpiry && new Date(tokenExpiry) > new Date()) {
+  const tokenExpiry = localStorage.getItem("tokenExpiry");
+
+  if (token && tokenExpiry) {
+    if (new Date(tokenExpiry) > new Date()) {
       return token;
+    } else {
+      // Token expired, clean up
+      localStorage.removeItem("token");
+      localStorage.removeItem("tokenExpiry");
+      localStorage.removeItem("user");
     }
   }
   return null;
 };
 
+// Simple authentication error detection
+const isAuthenticationError = (error: any): boolean => {
+  if (!error) return false;
+
+  let errorMessage = "Unknown error";
+  if (error && typeof error === "object" && "message" in error) {
+    errorMessage = String(error.message);
+  } else if (error && typeof error.toString === "function") {
+    errorMessage = error.toString();
+  } else if (typeof error === "string") {
+    errorMessage = error;
+  }
+
+  return (
+    errorMessage.includes("authentication") ||
+    errorMessage.includes("token") ||
+    errorMessage.includes("unauthorized") ||
+    errorMessage.includes("Authentication failed") ||
+    errorMessage.includes("403") ||
+    errorMessage.includes("401")
+  );
+};
+
+// Store the current server connection (not persisted)
+let currentServer: any = null;
+
 export const useHyphaStore = createPersistStore(
   { ...DEFAULT_HYPHA_STATE },
   (set, get) => ({
     setUser(user: User | null) {
-      set((state) => ({
-        ...state,
-        user,
-      }));
+      set((state) => ({ ...state, user }));
     },
 
     setResourceType(type: string | null) {
-      set((state) => ({
-        ...state,
-        resourceType: type,
-      }));
+      set((state) => ({ ...state, resourceType: type }));
     },
 
     setResources(resources: Resource[]) {
-      set((state) => ({
-        ...state,
-        resources,
-      }));
+      set((state) => ({ ...state, resources }));
     },
 
     setTotalItems(total: number) {
-      set((state) => ({
-        ...state,
-        totalItems: total,
+      set((state) => ({ ...state, totalItems: total }));
+    },
+
+    // Get the current server connection (creates one if needed)
+    async getServer(): Promise<any> {
+      console.log("[HyphaStore] getServer called");
+      const token = getSavedToken();
+      if (!token) {
+        console.error("[HyphaStore] No token available");
+        throw new Error(
+          "No authentication token available. Please log in first.",
+        );
+      }
+      console.log("[HyphaStore] Token found:", token.substring(0, 20) + "...");
+
+      // If we have a current server, test it
+      if (currentServer) {
+        try {
+          console.log("[HyphaStore] Testing existing server connection...");
+          await currentServer.listServices();
+          console.log("[HyphaStore] Existing server connection is valid");
+          return currentServer;
+        } catch (error) {
+          console.log(
+            "[HyphaStore] Existing server disconnected, creating new connection...",
+            error,
+          );
+          currentServer = null;
+        }
+      }
+
+      // Create new connection
+      console.log("[HyphaStore] Creating new server connection...");
+      try {
+        currentServer = await hyphaWebsocketClient.connectToServer({
+          server_url: SERVER_URL,
+          token: token,
+          method_timeout: 180000,
+        });
+        console.log("[HyphaStore] New server connection created successfully");
+        return currentServer;
+      } catch (error) {
+        console.error(
+          "[HyphaStore] Failed to create server connection:",
+          error,
+        );
+        throw error;
+      }
+    },
+
+    // Add method to handle authentication failures
+    handleAuthenticationFailure() {
+      console.warn(
+        "[HyphaStore] Authentication failure detected, logging out user",
+      );
+
+      // Clear authentication data from localStorage
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("token");
+        localStorage.removeItem("tokenExpiry");
+        localStorage.removeItem("user");
+      }
+
+      // Clear current server
+      currentServer = null;
+
+      // Reset state
+      set(() => ({
+        ...DEFAULT_HYPHA_STATE,
       }));
     },
 
@@ -179,32 +262,12 @@ export const useHyphaStore = createPersistStore(
     async connect(config: ConnectConfig) {
       const state = get();
 
-      // Add connection guard - but allow reconnection if user/server are missing
-      if (
-        (state.isConnecting || state.isConnected) &&
-        state.server &&
-        state.user
-      ) {
+      // Add connection guard
+      if (state.isConnecting || state.isConnected) {
         console.log(
-          "[HyphaStore] Already connected with user and server, skipping...",
+          "[HyphaStore] Already connected or connecting, skipping...",
         );
-        return state.server;
-      }
-
-      // If already connecting, wait for it to complete
-      if (state.isConnecting) {
-        console.log("[HyphaStore] Already connecting, waiting...");
-        // Poll for connection completion
-        let attempts = 0;
-        while (state.isConnecting && attempts < 30) {
-          // Wait up to 15 seconds
-          await new Promise((resolve) => setTimeout(resolve, 500));
-          const currentState = get();
-          if (!currentState.isConnecting) {
-            return currentState.server;
-          }
-          attempts++;
-        }
+        return await this.getServer();
       }
 
       set((state) => ({ ...state, isConnecting: true }));
@@ -212,40 +275,17 @@ export const useHyphaStore = createPersistStore(
       try {
         console.log("[HyphaStore] Connecting to Hypha server...");
 
-        let client = state.client;
-        if (!client) {
-          client = await hyphaWebsocketClient.connectToServer({
-            server_url: config.server_url,
-            token: config.token,
-            method_timeout: config.method_timeout || 180000,
-          });
+        const server = await hyphaWebsocketClient.connectToServer({
+          server_url: config.server_url,
+          token: config.token,
+          method_timeout: config.method_timeout || 180000,
+        });
 
-          set((state) => ({ ...state, client }));
-        } else {
-          // If we have a client but it's disconnected, reconnect
-          try {
-            // Test the connection
-            await client.getServices();
-          } catch (error) {
-            console.log(
-              "[HyphaStore] Existing client disconnected, reconnecting...",
-            );
-            client = await hyphaWebsocketClient.connectToServer({
-              server_url: config.server_url,
-              token: config.token,
-              method_timeout: config.method_timeout || 180000,
-            });
-            set((state) => ({ ...state, client }));
-          }
-        }
+        // Set the current server
+        currentServer = server;
 
-        // Get artifact manager service
-        const artifactManager = await client.getService(
-          "public/artifact-manager",
-        );
-
-        // Get user from client config
-        const user = client.config?.user;
+        // Get user from server config
+        const user = server.config?.user;
         if (user) {
           // Save user to localStorage
           localStorage.setItem("user", JSON.stringify(user));
@@ -253,9 +293,7 @@ export const useHyphaStore = createPersistStore(
 
         set((state) => ({
           ...state,
-          server: client,
           user: user || null,
-          artifactManager,
           isConnected: true,
           isConnecting: false,
         }));
@@ -265,27 +303,36 @@ export const useHyphaStore = createPersistStore(
           isConnected: true,
         });
 
-        return client;
+        return server;
       } catch (error) {
         console.error("[HyphaStore] Failed to connect:", error);
-        set((state) => ({
-          ...state,
-          isConnected: false,
-          isConnecting: false,
-        }));
+
+        // Check if this is an authentication error
+        if (isAuthenticationError(error)) {
+          // Handle authentication failure by clearing state
+          const store = get() as any;
+          if (store.handleAuthenticationFailure) {
+            store.handleAuthenticationFailure();
+          }
+        } else {
+          set((state) => ({
+            ...state,
+            isConnected: false,
+            isConnecting: false,
+          }));
+        }
         throw error;
       }
     },
 
     async disconnect() {
-      const state = get();
-
-      if (state.client) {
+      if (currentServer) {
         try {
-          await state.client.disconnect();
+          await currentServer.disconnect();
         } catch (error) {
           console.error("[HyphaStore] Error during disconnect:", error);
         }
+        currentServer = null;
       }
 
       // Clear localStorage
@@ -320,50 +367,18 @@ export const useHyphaStore = createPersistStore(
         set((state) => ({
           ...state,
           user,
+          isConnected: true, // We have credentials, consider connected
         }));
       }
     },
 
     // Initialize default project for file uploads
     async initializeDefaultProject() {
-      // Retry logic for connection timing issues
-      let retries = 3;
-      let delay = 1000;
-      let state = get();
+      const state = get();
+      const token = getSavedToken();
 
-      while (retries > 0) {
-        state = get(); // Refresh state on each retry
-
-        console.log(
-          `[HyphaStore] Checking connection state - Server: ${!!state.server}, User: ${!!state.user}, Connected: ${state.isConnected}`,
-        );
-
-        if (!state.server || !state.user) {
-          console.warn(
-            `[HyphaStore] Cannot initialize default project - no server connection or user (${retries} retries left)`,
-          );
-          console.warn(`[HyphaStore] State details:`, {
-            hasServer: !!state.server,
-            hasUser: !!state.user,
-            userEmail: state.user?.email,
-            isConnected: state.isConnected,
-            isConnecting: state.isConnecting,
-          });
-
-          if (retries > 1) {
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            retries--;
-            delay *= 2; // exponential backoff
-            continue;
-          } else {
-            throw new Error("Not authenticated or server not available");
-          }
-        } else {
-          console.log(
-            `[HyphaStore] Connection verified - proceeding with project initialization`,
-          );
-          break; // Connection is available
-        }
+      if (!token || !state.user) {
+        throw new Error("Not authenticated or server not available");
       }
 
       if (state.defaultProject) {
@@ -377,8 +392,11 @@ export const useHyphaStore = createPersistStore(
       try {
         console.log("[HyphaStore] Initializing default project...");
 
+        // Get server connection
+        const server = await this.getServer();
+
         // Get artifact manager from server
-        const artifactManager = await state.server.getService(
+        const artifactManager = await server.getService(
           "public/artifact-manager",
         );
 
@@ -482,40 +500,47 @@ export const useHyphaStore = createPersistStore(
     ): Promise<void> {
       const state = get();
 
-      if (!state.artifactManager || !state.defaultProject) {
-        throw new Error("No artifact manager or default project available");
+      if (!state.defaultProject) {
+        await this.initializeDefaultProject();
       }
 
+      const server = await this.getServer();
+      const artifactManager = await server.getService(
+        "public/artifact-manager",
+      );
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("artifact_id", state.defaultProject!);
+      formData.append("version", "stage");
+
       try {
-        console.log(
-          "[HyphaStore] Uploading file to default project:",
-          file.name,
-        );
-
-        // Get presigned URL for upload
-        const putUrl = await state.artifactManager.put_file({
-          artifact_id: state.defaultProject,
-          file_path: file.name,
-          _rkwargs: true,
-        });
-
-        // Upload file with progress tracking
-        const response = await fetch(putUrl, {
-          method: "PUT",
-          body: file,
-          headers: {
-            "Content-Type": "",
+        await artifactManager.put_file(
+          {
+            artifact_id: state.defaultProject!,
+            file_path: file.name,
+            version: "stage",
+            _upload_file: file,
+            _rkwargs: true,
           },
-        });
-
-        if (!response.ok) {
-          throw new Error(`Upload failed with status: ${response.status}`);
-        }
+          {
+            onUploadProgress: (progressEvent: any) => {
+              if (onProgress && progressEvent.total) {
+                const progress = Math.round(
+                  (progressEvent.loaded * 100) / progressEvent.total,
+                );
+                onProgress(progress);
+              }
+            },
+          },
+        );
 
         console.log("[HyphaStore] File uploaded successfully:", file.name);
       } catch (error) {
         console.error("[HyphaStore] Error uploading file:", error);
-        throw error;
+        throw new Error(
+          `Failed to upload file: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
       }
     },
 
@@ -523,12 +548,17 @@ export const useHyphaStore = createPersistStore(
     async listProjectFiles(): Promise<any[]> {
       const state = get();
 
-      if (!state.artifactManager || !state.defaultProject) {
+      if (!state.defaultProject) {
         return [];
       }
 
       try {
-        const fileList = await state.artifactManager.list_files({
+        const server = await this.getServer();
+        const artifactManager = await server.getService(
+          "public/artifact-manager",
+        );
+
+        const fileList = await artifactManager.list_files({
           artifact_id: state.defaultProject,
           version: "stage",
           _rkwargs: true,

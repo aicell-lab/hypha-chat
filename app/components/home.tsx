@@ -6,7 +6,7 @@ import styles from "./home.module.scss";
 
 import log from "loglevel";
 import dynamic from "next/dynamic";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   HashRouter as Router,
   Routes,
@@ -287,60 +287,46 @@ const useHyphaAgent = () => {
     undefined,
   );
   const { user, isConnected } = useHyphaStore();
+  const store = useHyphaStore();
+  const isInitializedRef = useRef(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Initialize HyphaAgent when user is authenticated
+  // Initialize HyphaAgent with store server connection
   useEffect(() => {
-    console.log(
-      "[useHyphaAgent] Effect triggered. User:",
-      !!user,
-      "Connected:",
-      isConnected,
+    log.info(
+      `[useHyphaAgent] Effect triggered. User: ${!!user} Connected: ${isConnected} Already initialized: ${!!hyphaAgent}`,
     );
 
     if (!user || !isConnected) {
-      console.log(
+      log.info(
         "[useHyphaAgent] User not authenticated or not connected, clearing agent",
       );
-      // Clear existing agent if user is not authenticated
-      setHyphaAgent((prev) => {
-        if (prev) {
-          prev.disconnect();
-        }
-        return undefined;
-      });
+      if (hyphaAgent) {
+        hyphaAgent.disconnect();
+        setHyphaAgent(undefined);
+      }
       return;
     }
 
-    // Don't recreate if we already have an agent for this user
-    setHyphaAgent((prev) => {
-      if (prev) {
-        console.log("[useHyphaAgent] Agent already exists for user");
-        return prev;
+    if (!hyphaAgent) {
+      try {
+        log.info(
+          "[useHyphaAgent] Creating new HyphaAgent with external server",
+        );
+
+        const agent = new HyphaAgentApi(
+          "https://hypha.aicell.io",
+          "hypha-agents/deno-app-engine",
+          () => store.getServer(), // Wrap in arrow function to preserve context
+        );
+
+        setHyphaAgent(agent);
+        log.info("[useHyphaAgent] HyphaAgent initialized successfully");
+      } catch (error) {
+        log.error("[useHyphaAgent] Failed to initialize HyphaAgent:", error);
       }
-
-      console.log(
-        "[useHyphaAgent] Creating new HyphaAgent (without external server)",
-      );
-      // Create HyphaAgent without external server - it will create its own connection
-      const agentApi = new HyphaAgentApi(
-        "https://hypha.aicell.io",
-        "hypha-agents/deno-app-engine",
-        // Don't pass external server - let it create its own connection
-      );
-      return agentApi;
-    });
-
-    // Cleanup function
-    return () => {
-      console.log("[useHyphaAgent] Cleaning up agent");
-      setHyphaAgent((prev) => {
-        if (prev) {
-          prev.disconnect();
-        }
-        return undefined;
-      });
-    };
-  }, [user, isConnected]); // Depend on user and connection state instead of server
+    }
+  }, [user, isConnected, hyphaAgent, store]);
 
   return hyphaAgent;
 };
@@ -418,10 +404,19 @@ const useModels = (mlcllm: MlcLLMApi | undefined) => {
 
 const useInitializeHypha = () => {
   const { initialize } = useHyphaStore();
+  const isInitializedRef = useRef(false);
+
+  // Memoize the initialize function to prevent unnecessary re-initializations
+  const stableInitialize = useCallback(() => {
+    if (!isInitializedRef.current) {
+      isInitializedRef.current = true;
+      initialize();
+    }
+  }, [initialize]);
 
   useEffect(() => {
-    initialize();
-  }, [initialize]);
+    stableInitialize();
+  }, [stableInitialize]);
 };
 
 export function Home() {
@@ -431,6 +426,7 @@ export function Home() {
   const hyphaAgent = useHyphaAgent();
   const config = useAppConfig(); // Move this hook call to the top
   const { user, isConnected } = useHyphaStore();
+  const store = useHyphaStore();
 
   useSwitchTheme();
   useHtmlLang();

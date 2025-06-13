@@ -5,6 +5,29 @@ import { hyphaWebsocketClient } from "hypha-rpc";
 import { ChatOptions, LLMApi, LLMConfig, RequestMessage } from "./api";
 import { ChatCompletionFinishReason, CompletionUsage } from "@mlc-ai/web-llm";
 
+// Simple authentication error detection
+const isAuthenticationError = (error: any): boolean => {
+  if (!error) return false;
+
+  let errorMessage = "Unknown error";
+  if (error && typeof error === "object" && "message" in error) {
+    errorMessage = String(error.message);
+  } else if (error && typeof error.toString === "function") {
+    errorMessage = error.toString();
+  } else if (typeof error === "string") {
+    errorMessage = error;
+  }
+
+  return (
+    errorMessage.includes("authentication") ||
+    errorMessage.includes("token") ||
+    errorMessage.includes("unauthorized") ||
+    errorMessage.includes("Authentication failed") ||
+    errorMessage.includes("403") ||
+    errorMessage.includes("401")
+  );
+};
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -49,7 +72,7 @@ export class HyphaAgentApi implements LLMApi {
   constructor(
     private serverUrl: string = "https://hypha.aicell.io",
     private serviceId: string = "hypha-agents/deno-app-engine",
-    private externalServer?: any,
+    private getServerConnection?: () => Promise<any>,
   ) {}
 
   private getSavedToken(): string | null {
@@ -69,11 +92,20 @@ export class HyphaAgentApi implements LLMApi {
     if (this.isConnected) return;
 
     try {
-      // Use external server if provided, otherwise create new connection
-      if (this.externalServer) {
-        log.info("[HyphaAgent] Using existing server connection...");
+      // Use server connection provider if available, otherwise create new connection
+      if (this.getServerConnection) {
+        log.info("[HyphaAgent] Using server connection provider...");
 
-        this.server = this.externalServer;
+        try {
+          this.server = await this.getServerConnection();
+          log.info(
+            "[HyphaAgent] Server connection obtained:",
+            typeof this.server,
+          );
+        } catch (error) {
+          log.error("[HyphaAgent] Failed to get server connection:", error);
+          throw error;
+        }
 
         // Validate that the server has the required methods
         if (!this.server || typeof this.server.getService !== "function") {
@@ -96,11 +128,11 @@ export class HyphaAgentApi implements LLMApi {
           );
         }
       } else {
-        log.warn(
-          "[HyphaAgent] No external server provided, creating new connection...",
+        log.info(
+          "[HyphaAgent] No server connection provider, creating new connection...",
         );
-        log.warn(
-          "[HyphaAgent] This may cause 'Client already exists' errors if another connection exists",
+        log.info(
+          "[HyphaAgent] Note: This will create a separate connection which may cause performance overhead",
         );
         // Get saved token from localStorage
         const token = this.getSavedToken();
@@ -157,13 +189,14 @@ export class HyphaAgentApi implements LLMApi {
       log.error("[HyphaAgent] Failed to connect:", error);
 
       // Check if this is an authentication error
-      const errorMessage =
-        error?.message || error?.toString() || "Unknown error";
-      if (
-        errorMessage.includes("authentication") ||
-        errorMessage.includes("token") ||
-        errorMessage.includes("unauthorized")
-      ) {
+      if (isAuthenticationError(error)) {
+        // Clear local storage to ensure consistency
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("token");
+          localStorage.removeItem("tokenExpiry");
+          localStorage.removeItem("user");
+        }
+
         throw new Error("Authentication failed. Please log in again.");
       }
 
@@ -179,23 +212,25 @@ export class HyphaAgentApi implements LLMApi {
     }
 
     try {
-      // Check if agent already exists
-      if (this.agentId) {
-        try {
-          const existingAgents = await this.service.listAgents();
-          const existingAgent = existingAgents.find(
-            (a: AgentInfo) => a.id === this.agentId,
+      // Check if agent already exists - match the full agent ID from config
+      try {
+        const existingAgents = await this.service.listAgents();
+        const existingAgent = existingAgents.find((a: AgentInfo) => {
+          // Extract the agent part after the colon (e.g., "MZazLDPeIBxktE6fcgpRc@productive-martin-touch-upliftingly")
+          const agentPart = a.id.includes(":") ? a.id.split(":").pop() : a.id;
+          // Match the full agent ID from config
+          return agentPart === config.id;
+        });
+        if (existingAgent) {
+          log.info(
+            "[HyphaAgent] Agent already exists, reusing:",
+            existingAgent.id,
           );
-          if (existingAgent) {
-            log.info(
-              "[HyphaAgent] Agent already exists, reusing:",
-              this.agentId,
-            );
-            return existingAgent;
-          }
-        } catch (listError) {
-          log.warn("[HyphaAgent] Failed to check existing agents:", listError);
+          this.agentId = existingAgent.id;
+          return existingAgent;
         }
+      } catch (listError) {
+        log.warn("[HyphaAgent] Failed to check existing agents:", listError);
       }
 
       log.info("[HyphaAgent] Creating new agent:", config.id);
@@ -421,6 +456,22 @@ export class HyphaAgentApi implements LLMApi {
         return;
       }
 
+      // Check for authentication errors
+      if (isAuthenticationError(error)) {
+        // Clear local storage on authentication failure
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("token");
+          localStorage.removeItem("tokenExpiry");
+          localStorage.removeItem("user");
+        }
+
+        log.error("[HyphaAgent] Authentication error during chat:", error);
+        options.onError?.(
+          new Error("Authentication failed. Please log in again."),
+        );
+        return;
+      }
+
       log.error("[HyphaAgent] Chat error:", error);
       options.onError?.(error);
     } finally {
@@ -452,16 +503,20 @@ export class HyphaAgentApi implements LLMApi {
 
   async disconnect(): Promise<void> {
     try {
-      // Only disconnect if we created the connection (not using external server)
-      if (this.server && "disconnect" in this.server && !this.externalServer) {
+      // Only disconnect if we created the connection (not using server connection provider)
+      if (
+        this.server &&
+        "disconnect" in this.server &&
+        !this.getServerConnection
+      ) {
         await this.server.disconnect();
       }
     } catch (error) {
       log.error("[HyphaAgent] Error disconnecting:", error);
     }
 
-    // Reset state but don't clear external server
-    this.server = this.externalServer || null;
+    // Reset state
+    this.server = null;
     this.service = null;
     this.isConnected = false;
     this.agentId = null;
@@ -473,13 +528,11 @@ export class HyphaAgentApi implements LLMApi {
     return this.getSavedToken() !== null;
   }
 
-  // Set external server connection
-  setServer(server: any): void {
-    this.externalServer = server;
-    this.server = server;
-    // Reset connection state to force re-initialization with new server
-    if (server) {
-      this.isConnected = false;
-    }
+  // Set server connection provider
+  setServerConnectionProvider(getServerConnection: () => Promise<any>): void {
+    this.getServerConnection = getServerConnection;
+    // Reset connection state to force re-initialization with new provider
+    this.server = null;
+    this.isConnected = false;
   }
 }

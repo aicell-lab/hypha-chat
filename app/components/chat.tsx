@@ -98,6 +98,7 @@ import { ErrorBoundary } from "./error";
 import { InputRange } from "./input-range";
 
 import { useHyphaStore } from "../store/hypha";
+import { AgentConfig } from "../client/hypha-agent";
 
 export function ScrollDownToast(prop: { show: boolean; onclick: () => void }) {
   return (
@@ -454,11 +455,11 @@ function ChatAction(props: {
 
 function FileUploadAction() {
   const {
-    client,
     defaultProject,
     user,
     isConnected,
     initializeDefaultProject,
+    getServer,
   } = useHyphaStore();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -467,11 +468,6 @@ function FileUploadAction() {
   const handleClick = async () => {
     if (!isConnected || !user) {
       showToast("Please log in to upload files");
-      return;
-    }
-
-    if (!client) {
-      showToast("Client not connected. Please try reconnecting.");
       return;
     }
 
@@ -525,15 +521,18 @@ function FileUploadAction() {
   };
 
   const uploadFileToProject = async (file: File): Promise<void> => {
-    if (!client || !defaultProject) {
-      throw new Error("No client connection or default project available");
+    if (!defaultProject) {
+      throw new Error("No default project available");
     }
 
     try {
       console.log("[FileUpload] Uploading file to default project:", file.name);
 
-      // Get artifact manager from client
-      const artifactManager = await client.getService(
+      // Get server connection
+      const server = await getServer();
+
+      // Get artifact manager from server
+      const artifactManager = await server.getService(
         "public/artifact-manager",
       );
 
@@ -814,9 +813,12 @@ function _Chat() {
   // Memoize selected agent resource to prevent unnecessary re-renders
   const selectedAgentResource = useMemo(() => {
     const selectedAgent = config.modelConfig.selectedAgent;
-    if (!selectedAgent || !resources) return null;
-    return resources.find((r: any) => r.id === selectedAgent.id) || null;
-  }, [config.modelConfig.selectedAgent?.id, resources]);
+    if (!selectedAgent || !resources || resources.length === 0) return null;
+
+    // Stable comparison using agent ID
+    const agentId = selectedAgent.id;
+    return resources.find((r: any) => r.id === agentId) || null;
+  }, [config.modelConfig.selectedAgent?.id, resources.length]); // Use resources.length instead of resources array
 
   // Track agent readiness for Hypha Agent client
   const [isAgentReady, setIsAgentReady] = useState(false);
@@ -864,7 +866,7 @@ function _Chat() {
   });
 
   // Track created agents to prevent duplicates
-  const createdAgentsRef = useRef<Set<string>>(new Set());
+  const createdAgentsRef = useRef<Record<string, boolean>>({});
 
   // auto grow input effect
   useEffect(measure, [userInput]);
@@ -900,7 +902,7 @@ function _Chat() {
   // Clear created agents when switching client types
   useEffect(() => {
     if (config.modelClientType !== ModelClient.HYPHA_AGENT) {
-      createdAgentsRef.current.clear();
+      createdAgentsRef.current = {};
     }
   }, [config.modelClientType]);
 
@@ -918,70 +920,69 @@ function _Chat() {
       return;
     }
 
-    // Prevent duplicate creation during React Strict Mode double-invoke
+    // If we have a selectedAgent but no selectedAgentResource and resources is not empty,
+    // it means resources are still loading
+    const selectedAgent = config.modelConfig.selectedAgent;
+    if (selectedAgent && !selectedAgentResource && resources.length > 0) {
+      console.log(
+        "[Chat] Agent resources loaded, looking for selected agent...",
+      );
+      const resource = resources.find((r) => r.id === selectedAgent.id);
+      if (resource) {
+        console.log("[Chat] Found agent resource:", resource.name);
+        // Note: selectedAgentResource is computed from useMemo, can't set it directly
+      } else {
+        console.warn("[Chat] Selected agent not found in resources");
+      }
+      return;
+    }
+
+    if (!selectedAgentResource) {
+      console.log("[Chat] No agent resource selected");
+      setIsAgentReady(false);
+      return;
+    }
+
     let cancelled = false;
-    setIsAgentReady(false); // Reset readiness when starting agent creation
 
-    const createOrSelectAgent = async () => {
-      if (cancelled) return;
-
-      const selectedAgent = config.modelConfig.selectedAgent;
-
-      // Generate composite agent ID based on session and selected agent
-      const agentId =
-        selectedAgent && selectedAgentResource
-          ? `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`
-          : selectedAgent
-            ? `${session.id}@${selectedAgent.id.split("/").pop() || selectedAgent.id}`
-            : session.id; // fallback for default agent
-
+    const createOrFindAgent = async () => {
       try {
-        // Double-check authentication before attempting agent operations
-        if (!hyphaAgent.isAuthenticated()) {
-          console.error("[Chat] User not authenticated - cannot create agent");
-          setIsAgentReady(false);
+        // Generate the expected agent ID based on session and selected agent resource
+        const agentId = `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`;
+
+        console.log("[Chat] Looking for or creating agent:", agentId);
+
+        // Check if we already created this specific agent
+        if (createdAgentsRef.current[agentId]) {
+          console.log("[Chat] Agent already created:", agentId);
+          hyphaAgent.setAgentId(agentId);
+          if (!cancelled) setIsAgentReady(true);
           return;
         }
 
-        // Check if we've already created an agent for this session
-        if (createdAgentsRef.current.has(agentId)) {
-          console.log("[Chat] Agent already created for session:", session.id);
-          setIsAgentReady(true);
-          return;
-        }
+        // List existing agents to see if one already exists with this ID
+        console.log("[Chat] Checking existing agents...");
+        const existingAgents = await hyphaAgent.listAgents();
+        console.log("[Chat] Checking existing agents:", existingAgents);
 
-        // Mark agent as being created immediately to prevent duplicate creation attempts
-        createdAgentsRef.current.add(agentId);
+        // Look for exact match first
+        let existingAgent = existingAgents.find((agent) =>
+          agent.id.endsWith(agentId),
+        );
 
-        // First, try to find an existing agent with this agent ID
-        try {
-          const existingAgents = await hyphaAgent.listAgents();
+        if (existingAgent) {
           console.log(
-            "[Chat] Checking existing agents:",
-            existingAgents.map((a) => ({ id: a.id, name: a.name })),
+            "[Chat] Found existing exact match agent:",
+            existingAgent.id,
           );
-
-          const existingAgent = existingAgents.find((agent) => {
-            return agent.id.endsWith(":" + agentId);
-          });
-
-          if (existingAgent) {
-            console.log(
-              "[Chat] Reusing existing agent:",
-              existingAgent.id,
-              "for session:",
-              session.id,
-            );
-            hyphaAgent.setAgentId(existingAgent.id);
-            createdAgentsRef.current.add(agentId);
-            setIsAgentReady(true);
-            return;
-          } else {
-            console.log("[Chat] No existing agent found with ID:", agentId);
-          }
-        } catch (listError) {
-          console.warn("[Chat] Could not list existing agents:", listError);
+          hyphaAgent.setAgentId(existingAgent.id);
+          createdAgentsRef.current[agentId] = true;
+          if (!cancelled) setIsAgentReady(true);
+          return;
         }
+
+        // If no exact match found, create new agent
+        console.log("[Chat] Creating new agent...");
 
         let agentToCreate: any = null;
 
@@ -1041,133 +1042,37 @@ function _Chat() {
         );
         console.log("[Chat] Agent config:", agentToCreate);
 
-        // Create new agent
-        let agent;
-        try {
-          agent = await hyphaAgent.createAgent(agentToCreate);
+        const newAgent = await hyphaAgent.createAgent(agentToCreate);
+        console.log("[Chat] Agent created successfully:", newAgent.id);
 
-          if (!agent || !agent.id) {
-            throw new Error("Agent creation returned invalid response");
-          }
-        } catch (createError: any) {
-          // If agent already exists, try to find and reuse it
-          if (createError.message?.includes("already exists")) {
-            console.log(
-              "[Chat] Agent already exists, attempting to find and reuse with ID:",
-              agentId,
-            );
-            try {
-              const existingAgents = await hyphaAgent.listAgents();
-              const existingAgent = existingAgents.find((agent) => {
-                return agent.id === agentId;
-              });
-
-              if (existingAgent) {
-                console.log("[Chat] Found existing agent:", existingAgent.id);
-                hyphaAgent.setAgentId(existingAgent.id);
-                setIsAgentReady(true);
-                return;
-              }
-            } catch (findError) {
-              console.warn(
-                "[Chat] Could not find existing agent after creation failure:",
-                findError,
-              );
-            }
-          }
-          throw createError; // Re-throw if not a "already exists" error or couldn't find existing
-        }
-
-        // Use the full agent ID for chat operations
-        hyphaAgent.setAgentId(agent.id);
-
-        // Add a delay to ensure agent is fully initialized
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        // Verify agent is available before marking as created
-        try {
-          const agents = await hyphaAgent.listAgents();
-          const createdAgent = agents.find((a) => a.id.endsWith(agent.id));
-          if (!createdAgent) {
-            console.warn(
-              "[Chat] Agent not found in list after creation, but proceeding anyway",
-            );
-          }
-        } catch (listError) {
-          console.warn(
-            "[Chat] Could not verify agent availability:",
-            listError,
-          );
-        }
-
-        setIsAgentReady(true);
-        console.log(
-          "[Chat] Agent created and selected:",
-          agent.id,
-          "for session:",
-          session.id,
-        );
-      } catch (error: any) {
-        console.error(
-          "[Chat] Failed to create agent for session:",
-          session.id,
-          error,
-        );
-
-        // Show user-friendly error message
-        const errorMessage =
-          error?.message || error?.toString() || "Unknown error";
-        if (
-          errorMessage.includes("authentication") ||
-          errorMessage.includes("token") ||
-          errorMessage.includes("unauthorized") ||
-          errorMessage.includes("Authentication failed")
-        ) {
-          console.error(
-            "[Chat] Authentication error - user needs to log in again",
-          );
+        hyphaAgent.setAgentId(newAgent.id);
+        createdAgentsRef.current[agentId] = true;
+        if (!cancelled) setIsAgentReady(true);
+      } catch (error) {
+        console.error("[Chat] Failed to create/find agent:", error);
+        if (!cancelled) {
           setIsAgentReady(false);
-          return; // Don't try fallback for auth errors
-        } else if (
-          errorMessage.includes("not found") ||
-          errorMessage.includes("Agent")
-        ) {
-          console.warn("[Chat] Agent-related error, will try fallback");
-        } else {
-          console.error(
-            "[Chat] Unexpected error during agent creation:",
-            error,
+          showToast(
+            `Failed to initialize agent: ${error instanceof Error ? error.message : "Unknown error"}`,
           );
         }
       }
     };
 
-    createOrSelectAgent().catch((error) => {
-      if (!cancelled) {
-        console.error("[Chat] Unexpected error in agent creation:", error);
-        setIsAgentReady(false);
-      }
-    });
+    createOrFindAgent();
 
     return () => {
       cancelled = true;
-      // Clean up the agent ID from the created set to allow recreation if needed
-      const selectedAgent = config.modelConfig.selectedAgent;
-      const agentId =
-        selectedAgent && selectedAgentResource
-          ? `${session.id}@${selectedAgentResource.id.split("/").pop() || selectedAgentResource.id}`
-          : selectedAgent
-            ? `${session.id}@${selectedAgent.id.split("/").pop() || selectedAgent.id}`
-            : session.id;
-      createdAgentsRef.current.delete(agentId);
     };
   }, [
     config.modelClientType,
-    config.modelConfig.selectedAgent?.id,
-    selectedAgentResource,
     hyphaAgent,
+    selectedAgentResource,
     session.id,
-    isConnected, // Add authentication state to dependencies
+    isConnected,
+    user,
+    resources,
+    config.modelConfig.selectedAgent?.id,
   ]);
 
   const context: RenderMessage[] = useMemo(() => {

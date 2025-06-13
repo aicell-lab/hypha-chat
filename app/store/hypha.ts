@@ -1,5 +1,55 @@
-import { createPersistStore } from "../utils/store";
+import { create } from "zustand";
+import { combine } from "zustand/middleware";
+import { Updater } from "../typing";
+import { deepClone } from "../utils/clone";
 import { hyphaWebsocketClient } from "hypha-rpc";
+
+type MakeUpdater<T> = {
+  lastUpdateTime: number;
+  markUpdate: () => void;
+  update: Updater<T>;
+};
+
+type SetStoreState<T> = (
+  partial: T | Partial<T> | ((state: T) => T | Partial<T>),
+  replace?: boolean | undefined,
+) => void;
+
+function createStore<T extends object, M>(
+  state: T,
+  methods: (
+    set: SetStoreState<T & MakeUpdater<T>>,
+    get: () => T & MakeUpdater<T>,
+  ) => M,
+) {
+  return create(
+    combine(
+      {
+        ...state,
+        lastUpdateTime: 0,
+      },
+      (set, get) => {
+        return {
+          ...methods(set, get as any),
+
+          markUpdate() {
+            set({ lastUpdateTime: Date.now() } as Partial<
+              T & M & MakeUpdater<T>
+            >);
+          },
+          update(updater: Updater<T>) {
+            const state = deepClone(get());
+            updater(state);
+            set({
+              ...state,
+              lastUpdateTime: Date.now(),
+            });
+          },
+        } as M & MakeUpdater<T>;
+      },
+    ),
+  );
+}
 
 export interface User {
   email: string;
@@ -124,23 +174,23 @@ const isAuthenticationError = (error: any): boolean => {
 let currentServer: any = null;
 let connectionPromise: Promise<any> | null = null;
 
-export const useHyphaStore = createPersistStore(
+export const useHyphaStore = createStore(
   { ...DEFAULT_HYPHA_STATE },
   (set, get) => ({
     setUser(user: User | null) {
-      set((state) => ({ ...state, user }));
+      set((state: HyphaState) => ({ ...state, user }));
     },
 
     setResourceType(type: string | null) {
-      set((state) => ({ ...state, resourceType: type }));
+      set((state: HyphaState) => ({ ...state, resourceType: type }));
     },
 
     setResources(resources: Resource[]) {
-      set((state) => ({ ...state, resources }));
+      set((state: HyphaState) => ({ ...state, resources }));
     },
 
     setTotalItems(total: number) {
-      set((state) => ({ ...state, totalItems: total }));
+      set((state: HyphaState) => ({ ...state, totalItems: total }));
     },
 
     // Get the current server connection (creates one if needed)
@@ -511,7 +561,10 @@ export const useHyphaStore = createPersistStore(
             "[HyphaStore] Default project already exists, using existing:",
             existingProject.id,
           );
-          set((state) => ({ ...state, defaultProject: existingProject.id }));
+          set((state: HyphaState) => ({
+            ...state,
+            defaultProject: existingProject.id,
+          }));
           return existingProject.id;
         } catch (readError) {
           // Project doesn't exist, create it
@@ -537,7 +590,10 @@ export const useHyphaStore = createPersistStore(
           });
 
           console.log("[HyphaStore] Created default project:", project.id);
-          set((state) => ({ ...state, defaultProject: project.id }));
+          set((state: HyphaState) => ({
+            ...state,
+            defaultProject: project.id,
+          }));
           return project.id;
         }
       } catch (error) {
@@ -645,7 +701,4 @@ export const useHyphaStore = createPersistStore(
       }
     },
   }),
-  {
-    name: "hypha-store",
-  },
 );

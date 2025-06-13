@@ -327,6 +327,46 @@ function _MarkDownContent(props: { content: string }) {
               </div>
             );
           },
+          // Custom renderer for <returnToUser> tag
+          returntouser: (props: any) => (
+            <span
+              className="return-to-user-container"
+              style={{
+                display: "block",
+                backgroundColor: "var(--color-success-subtle)",
+                border: "2px solid var(--color-success-emphasis)",
+                borderRadius: "12px",
+                padding: "16px 20px",
+                margin: "20px 0",
+                position: "relative",
+                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+              }}
+            >
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                  fontWeight: "bold",
+                  color: "var(--color-success-fg)",
+                  marginBottom: "12px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.5px",
+                }}
+              >
+                📋 Response
+              </span>
+              <span
+                style={{
+                  display: "block",
+                  color: "var(--color-fg-default)",
+                  lineHeight: "1.6",
+                }}
+                {...props}
+              />
+            </span>
+          ),
         } as any
       }
     >

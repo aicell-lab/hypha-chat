@@ -122,6 +122,7 @@ const isAuthenticationError = (error: any): boolean => {
 
 // Store the current server connection (not persisted)
 let currentServer: any = null;
+let connectionPromise: Promise<any> | null = null;
 
 export const useHyphaStore = createPersistStore(
   { ...DEFAULT_HYPHA_STATE },
@@ -145,6 +146,22 @@ export const useHyphaStore = createPersistStore(
     // Get the current server connection (creates one if needed)
     async getServer(): Promise<any> {
       console.log("[HyphaStore] getServer called");
+
+      // If there's already a connection attempt in progress, wait for it
+      if (connectionPromise) {
+        console.log(
+          "[HyphaStore] Connection attempt already in progress, waiting...",
+        );
+        try {
+          return await connectionPromise;
+        } catch (error) {
+          console.log(
+            "[HyphaStore] Previous connection attempt failed, will retry",
+          );
+          connectionPromise = null;
+        }
+      }
+
       const token = getSavedToken();
       if (!token) {
         // Debug: check what's actually in localStorage
@@ -178,23 +195,34 @@ export const useHyphaStore = createPersistStore(
         }
       }
 
-      // Create new connection
+      // Create new connection with promise to prevent concurrent attempts
       console.log("[HyphaStore] Creating new server connection...");
-      try {
-        currentServer = await hyphaWebsocketClient.connectToServer({
-          server_url: SERVER_URL,
-          token: token,
-          method_timeout: 180000,
-        });
-        console.log("[HyphaStore] New server connection created successfully");
-        return currentServer;
-      } catch (error) {
-        console.error(
-          "[HyphaStore] Failed to create server connection:",
-          error,
-        );
-        throw error;
-      }
+      connectionPromise = (async () => {
+        try {
+          const server = await hyphaWebsocketClient.connectToServer({
+            server_url: SERVER_URL,
+            token: token,
+            method_timeout: 180000,
+          });
+
+          currentServer = server;
+          console.log(
+            "[HyphaStore] New server connection created successfully",
+          );
+          return server;
+        } catch (error) {
+          console.error(
+            "[HyphaStore] Failed to create server connection:",
+            error,
+          );
+          currentServer = null;
+          throw error;
+        } finally {
+          connectionPromise = null;
+        }
+      })();
+
+      return await connectionPromise;
     },
 
     // Add method to handle authentication failures
@@ -210,8 +238,9 @@ export const useHyphaStore = createPersistStore(
         localStorage.removeItem("user");
       }
 
-      // Clear current server
+      // Clear current server and connection promise
       currentServer = null;
+      connectionPromise = null;
 
       // Reset state
       set(() => ({
@@ -359,6 +388,9 @@ export const useHyphaStore = createPersistStore(
         currentServer = null;
       }
 
+      // Clear connection promise
+      connectionPromise = null;
+
       // Clear localStorage
       if (typeof window !== "undefined") {
         localStorage.removeItem("token");
@@ -391,7 +423,8 @@ export const useHyphaStore = createPersistStore(
         set((state) => ({
           ...state,
           user,
-          isConnected: true, // We have credentials, consider connected
+          // Don't set isConnected: true here as it causes race conditions
+          // Connection status should only be set when actual server connection is established
         }));
       }
     },

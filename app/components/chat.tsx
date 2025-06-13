@@ -1147,7 +1147,9 @@ function _Chat() {
       }
     };
 
-    createOrFindAgent();
+    if (user && isConnected && hyphaAgent) {
+      createOrFindAgent();
+    }
 
     return () => {
       cancelled = true;

@@ -520,11 +520,69 @@ export class HyphaAgentApi implements LLMApi {
           );
           return;
         } else if (chunk.type === "text_chunk" && chunk.content) {
-          accumulatedContent += chunk.content;
-          options.onUpdate?.(accumulatedContent, chunk.content);
+          // Check if this chunk contains the <returnToUser> tag
+          const returnToUserTagRegex = /<returnToUser>/i;
+          const chunkContent = chunk.content;
+
+          if (returnToUserTagRegex.test(accumulatedContent + chunkContent)) {
+            // If the <returnToUser> tag is detected in the accumulated content or this chunk,
+            // clear all previous content and start fresh from the tag
+            const fullContent = accumulatedContent + chunkContent;
+            const tagMatch = fullContent.match(returnToUserTagRegex);
+
+            if (tagMatch) {
+              // Find the position of the tag and get content from that point
+              const tagPosition = tagMatch.index || 0;
+              const contentFromTag = fullContent.substring(tagPosition);
+
+              // Clear accumulated content and start fresh with content from the tag
+              accumulatedContent = contentFromTag;
+              log.info(
+                "[HyphaAgent] <returnToUser> tag detected, clearing previous content",
+              );
+
+              // Update with the cleared content
+              options.onUpdate?.(accumulatedContent, accumulatedContent);
+            } else {
+              // Fallback: just add the chunk normally
+              accumulatedContent += chunkContent;
+              options.onUpdate?.(accumulatedContent, chunkContent);
+            }
+          } else {
+            // Normal chunk processing
+            accumulatedContent += chunkContent;
+            options.onUpdate?.(accumulatedContent, chunkContent);
+          }
         } else if (chunk.type === "text" && chunk.content) {
-          accumulatedContent = chunk.content;
-          options.onUpdate?.(accumulatedContent, chunk.content);
+          // For full text updates, also check for returnToUser tag
+          const returnToUserTagRegex = /<returnToUser>/i;
+          const textContent = chunk.content;
+
+          if (returnToUserTagRegex.test(textContent)) {
+            // If the <returnToUser> tag is in the full text, extract content from the tag onward
+            const tagMatch = textContent.match(returnToUserTagRegex);
+
+            if (tagMatch) {
+              const tagPosition = tagMatch.index || 0;
+              const contentFromTag = textContent.substring(tagPosition);
+
+              // Replace accumulated content with content from the tag
+              accumulatedContent = contentFromTag;
+              log.info(
+                "[HyphaAgent] <returnToUser> tag detected in full text, clearing previous content",
+              );
+
+              options.onUpdate?.(accumulatedContent, accumulatedContent);
+            } else {
+              // Fallback: use the full content
+              accumulatedContent = textContent;
+              options.onUpdate?.(accumulatedContent, textContent);
+            }
+          } else {
+            // Normal full text processing
+            accumulatedContent = textContent;
+            options.onUpdate?.(accumulatedContent, textContent);
+          }
         } else if (chunk.type === "function_call") {
           // Code execution is starting
           const functionName = chunk.name || "unknown_function";
@@ -562,10 +620,34 @@ export class HyphaAgentApi implements LLMApi {
             execution.output = output;
           }
 
-          // Add execution completion to accumulated content
-          const completionMessage = `\n✅ **Execution completed**\n\n`;
-          accumulatedContent += completionMessage;
-          options.onUpdate?.(accumulatedContent, completionMessage);
+          // Format and display the results immediately
+          let resultMessage = `\n✅ **Execution completed**\n\n`;
+
+          if (output) {
+            resultMessage += `**Result:**\n\n`;
+
+            // Try to format output as JSON if possible
+            try {
+              const parsedOutput = JSON.parse(output);
+              resultMessage += "```json\n";
+              resultMessage += JSON.stringify(parsedOutput, null, 2);
+              resultMessage += "\n```\n\n";
+            } catch {
+              // If not JSON, check if it looks like console output or plain text
+              if (output.includes("\n") || output.length > 100) {
+                // Multi-line or long output - use code block
+                resultMessage += "```\n";
+                resultMessage += output;
+                resultMessage += "\n```\n\n";
+              } else {
+                // Short output - display inline with code formatting
+                resultMessage += `\`${output}\`\n\n`;
+              }
+            }
+          }
+
+          accumulatedContent += resultMessage;
+          options.onUpdate?.(accumulatedContent, resultMessage);
 
           // Call the callback if provided
           options.onFunctionOutput?.(chunk.content, chunk.call_id);
@@ -721,7 +803,7 @@ export class HyphaAgentApi implements LLMApi {
     if (executions.length === 0) return "";
 
     let summary = "";
-    summary += `<details>\n\n<summary>🔧 Function Executions(${executions.length} ${executions.length === 1 ? "call" : "calls"})</summary>\n\n`;
+    summary += `<details>\n\n<summary>🔧 Function Executions (${executions.length} ${executions.length === 1 ? "call" : "calls"})</summary>\n\n`;
 
     executions.forEach((execution, index) => {
       const duration = execution.output ? "✅ completed" : "⏳ in progress";
@@ -733,25 +815,81 @@ export class HyphaAgentApi implements LLMApi {
       summary += `- **Status:** ${duration}\n\n`;
 
       if (execution.args && Object.keys(execution.args).length > 0) {
-        summary += `**Arguments:**\n\n`;
-        summary += "```json\n";
-        summary += JSON.stringify(execution.args, null, 2);
-        summary += "\n```\n\n";
+        // Special handling for runCode function
+        if (execution.name === "runCode" && execution.args.code) {
+          summary += `**Code:**\n\n`;
+
+          // Detect language from context or default to python
+          const language =
+            execution.args.language ||
+            (execution.args.kernel === "typescript"
+              ? "typescript"
+              : execution.args.kernel === "javascript"
+                ? "javascript"
+                : "python");
+
+          summary += `\`\`\`${language}\n`;
+          summary += execution.args.code;
+          summary += "\n```\n\n";
+
+          // Show other arguments if any (excluding code)
+          const otherArgs = { ...execution.args };
+          delete otherArgs.code;
+
+          if (Object.keys(otherArgs).length > 0) {
+            summary += `**Other Arguments:**\n\n`;
+            summary += "```json\n";
+            summary += JSON.stringify(otherArgs, null, 2);
+            summary += "\n```\n\n";
+          }
+        } else {
+          // Default handling for other functions
+          summary += `**Arguments:**\n\n`;
+          summary += "```json\n";
+          summary += JSON.stringify(execution.args, null, 2);
+          summary += "\n```\n\n";
+        }
       }
 
       if (execution.output) {
-        summary += `**Output:**\n\n`;
-        // Try to detect if output is JSON and format it nicely
-        try {
-          const parsedOutput = JSON.parse(execution.output);
-          summary += "```json\n";
-          summary += JSON.stringify(parsedOutput, null, 2);
-          summary += "\n```\n\n";
-        } catch {
-          // If not JSON, display as plain text with code formatting
-          summary += "```\n";
-          summary += execution.output;
-          summary += "\n```\n\n";
+        if (execution.name === "runCode") {
+          summary += `**Result:**\n\n`;
+          // For runCode, try to format output as JSON if possible
+          try {
+            const parsedOutput = JSON.parse(execution.output);
+            summary += "```json\n";
+            summary += JSON.stringify(parsedOutput, null, 2);
+            summary += "\n```\n\n";
+          } catch {
+            // If not JSON, check if it looks like console output or plain text
+            if (
+              execution.output.includes("\n") ||
+              execution.output.length > 100
+            ) {
+              // Multi-line or long output - use code block
+              summary += "```\n";
+              summary += execution.output;
+              summary += "\n```\n\n";
+            } else {
+              // Short output - display inline
+              summary += `\`${execution.output}\`\n\n`;
+            }
+          }
+        } else {
+          // Default handling for other functions
+          summary += `**Output:**\n\n`;
+          // Try to detect if output is JSON and format it nicely
+          try {
+            const parsedOutput = JSON.parse(execution.output);
+            summary += "```json\n";
+            summary += JSON.stringify(parsedOutput, null, 2);
+            summary += "\n```\n\n";
+          } catch {
+            // If not JSON, display as plain text with code formatting
+            summary += "```\n";
+            summary += execution.output;
+            summary += "\n```\n\n";
+          }
         }
       }
 

@@ -288,13 +288,13 @@ const useHyphaAgent = () => {
   );
   const { user, isConnected } = useHyphaStore();
   const store = useHyphaStore();
-  const isInitializedRef = useRef(false);
+  const isInitializingRef = useRef(false);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize HyphaAgent with store server connection
   useEffect(() => {
     log.info(
-      `[useHyphaAgent] Effect triggered. User: ${!!user} Connected: ${isConnected} Already initialized: ${!!hyphaAgent}`,
+      `[useHyphaAgent] Effect triggered. User: ${!!user} Connected: ${isConnected} Already initialized: ${!!hyphaAgent} Initializing: ${isInitializingRef.current}`,
     );
 
     if (!user || !isConnected) {
@@ -305,55 +305,83 @@ const useHyphaAgent = () => {
         hyphaAgent.disconnect();
         setHyphaAgent(undefined);
       }
+      isInitializingRef.current = false;
       return;
     }
 
-    if (!hyphaAgent) {
-      // Add a small delay to ensure token is properly saved
-      const initAgent = async () => {
-        try {
-          // Check if token is available before creating agent
-          const token = localStorage.getItem("token");
-          if (!token) {
-            log.warn(
-              "[useHyphaAgent] No token available, delaying agent creation",
-            );
-            return;
-          }
-
-          log.info(
-            "[useHyphaAgent] Creating new HyphaAgent with external server",
-          );
-
-          const agent = new HyphaAgentApi(
-            "https://hypha.aicell.io",
-            "hypha-agents/deno-app-engine",
-            () => store.getServer(), // Wrap in arrow function to preserve context
-          );
-
-          setHyphaAgent(agent);
-          log.info("[useHyphaAgent] HyphaAgent initialized successfully");
-        } catch (error) {
-          log.error("[useHyphaAgent] Failed to initialize HyphaAgent:", error);
-        }
-      };
-
-      // Clear any existing timeout
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-
-      // Delay initialization slightly to ensure token is available
-      timeoutRef.current = setTimeout(initAgent, 100);
+    // Guard against double initialization
+    if (hyphaAgent || isInitializingRef.current) {
+      log.info(
+        "[useHyphaAgent] Agent already exists or is initializing, skipping",
+      );
+      return;
     }
 
-    // Cleanup timeout on unmount
+    // Mark as initializing
+    isInitializingRef.current = true;
+
+    // Add a small delay to ensure token is properly saved
+    const initAgent = async () => {
+      try {
+        // Double-check initialization state
+        if (!isInitializingRef.current) {
+          log.info("[useHyphaAgent] Initialization cancelled");
+          return;
+        }
+
+        // Check if token is available before creating agent
+        const token = localStorage.getItem("token");
+        if (!token) {
+          log.warn(
+            "[useHyphaAgent] No token available, delaying agent creation",
+          );
+          isInitializingRef.current = false;
+          return;
+        }
+
+        log.info(
+          "[useHyphaAgent] Creating new HyphaAgent with external server",
+        );
+
+        const agent = new HyphaAgentApi(
+          "https://hypha.aicell.io",
+          "hypha-agents/deno-app-engine",
+          () => store.getServer(), // Wrap in arrow function to preserve context
+        );
+
+        // Only set the agent if we're still initializing (not cancelled)
+        if (isInitializingRef.current) {
+          setHyphaAgent(agent);
+          log.info("[useHyphaAgent] HyphaAgent initialized successfully");
+        } else {
+          log.info(
+            "[useHyphaAgent] Initialization was cancelled, disposing agent",
+          );
+          agent.disconnect();
+        }
+      } catch (error) {
+        log.error("[useHyphaAgent] Failed to initialize HyphaAgent:", error);
+      } finally {
+        isInitializingRef.current = false;
+      }
+    };
+
+    // Clear any existing timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+
+    // Delay initialization slightly to ensure token is available
+    timeoutRef.current = setTimeout(initAgent, 100);
+
+    // Cleanup timeout on unmount or dependency change
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+      isInitializingRef.current = false;
     };
-  }, [user, isConnected, hyphaAgent, store]);
+  }, [user, isConnected, store]); // Remove hyphaAgent from dependencies to prevent loops
 
   return hyphaAgent;
 };

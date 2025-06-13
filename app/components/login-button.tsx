@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useHyphaStore } from "../store/hypha";
 import { IconButton } from "./button";
 import UserIcon from "../icons/user.svg";
@@ -44,6 +44,9 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     initializeDefaultProject,
   } = useHyphaStore();
 
+  // Add a ref to track if auto-login has been attempted
+  const autoLoginAttemptedRef = useRef(false);
+
   // Add click outside handler to close dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -62,6 +65,8 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     try {
       await disconnect();
       setIsDropdownOpen(false);
+      // Reset auto-login flag so user can login again
+      autoLoginAttemptedRef.current = false;
     } catch (error) {
       console.error("Error during logout:", error);
     }
@@ -92,21 +97,27 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     }
   };
 
-  const handleLogin = useCallback(async () => {
+  const performLogin = async (isAutoLogin: boolean = false) => {
+    const logPrefix = isAutoLogin
+      ? "[LoginButton] Auto-login"
+      : "[LoginButton] Manual login";
+
     if (isLoggingIn || isConnecting || isConnected) {
-      console.log(
-        "[LoginButton] Already logging in or connected, skipping manual login",
-      );
+      console.log(`${logPrefix} - Already logging in or connected, skipping`);
       return;
     }
 
-    console.log("[LoginButton] Starting manual login");
+    console.log(`${logPrefix} - Starting login process`);
     setIsLoggingIn(true);
 
     try {
       let token = getSavedToken();
 
       if (!token) {
+        if (isAutoLogin) {
+          console.log(`${logPrefix} - No saved token, skipping auto-login`);
+          return;
+        }
         token = await login();
         if (!token) {
           throw new Error("Failed to obtain token");
@@ -129,62 +140,44 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
         console.warn("Failed to initialize default project:", error);
         // Don't throw error since login was successful
       }
+
+      if (isAutoLogin) {
+        autoLoginAttemptedRef.current = true;
+      }
     } catch (error) {
-      console.error("Error during login:", error);
+      console.error(`${logPrefix} - Error:`, error);
       localStorage.removeItem("token");
       localStorage.removeItem("tokenExpiry");
     } finally {
       setIsLoggingIn(false);
     }
-  }, [
-    connect,
-    initializeDefaultProject,
-    isLoggingIn,
-    isConnecting,
-    isConnected,
-  ]);
+  };
+
+  const handleLogin = useCallback(async () => {
+    await performLogin(false);
+  }, []);
 
   // Auto-login on component mount if token exists
   useEffect(() => {
     const autoLogin = async () => {
+      // Only attempt auto-login once and only if we haven't tried before
+      if (autoLoginAttemptedRef.current) {
+        return;
+      }
+
       const token = getSavedToken();
       if (token && !isConnected && !isConnecting && !isLoggingIn) {
-        console.log("[LoginButton] Starting auto-login with existing token");
-        setIsLoggingIn(true);
-        try {
-          await connect({
-            server_url: serverUrl,
-            token: token,
-            method_timeout: 180000,
-          });
-
-          // Initialize default project after successful connection
-          try {
-            await initializeDefaultProject();
-          } catch (error) {
-            console.warn("Failed to initialize default project:", error);
-            // Don't throw error since login was successful
-          }
-        } catch (error) {
-          console.error("Auto-login failed:", error);
-          localStorage.removeItem("token");
-          localStorage.removeItem("tokenExpiry");
-        } finally {
-          setIsLoggingIn(false);
-        }
+        await performLogin(true);
+      } else {
+        // Mark as attempted even if we don't have a token
+        autoLoginAttemptedRef.current = true;
       }
     };
 
-    // Delay auto-login slightly to avoid race conditions with manual login
-    const timeoutId = setTimeout(autoLogin, 50);
+    // Small delay to avoid race conditions with manual login
+    const timeoutId = setTimeout(autoLogin, 100);
     return () => clearTimeout(timeoutId);
-  }, [
-    connect,
-    isConnected,
-    isConnecting,
-    isLoggingIn,
-    initializeDefaultProject,
-  ]);
+  }, []); // Empty dependency array - only run on mount
 
   // Debug effect to log connection state changes
   useEffect(() => {

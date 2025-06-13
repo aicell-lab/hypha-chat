@@ -147,7 +147,15 @@ export const useHyphaStore = createPersistStore(
       console.log("[HyphaStore] getServer called");
       const token = getSavedToken();
       if (!token) {
-        console.error("[HyphaStore] No token available");
+        // Debug: check what's actually in localStorage
+        const rawToken = localStorage.getItem("token");
+        const rawExpiry = localStorage.getItem("tokenExpiry");
+        console.error(
+          "[HyphaStore] No token available. Raw token:",
+          !!rawToken,
+          "Raw expiry:",
+          rawExpiry,
+        );
         throw new Error(
           "No authentication token available. Please log in first.",
         );
@@ -267,7 +275,23 @@ export const useHyphaStore = createPersistStore(
         console.log(
           "[HyphaStore] Already connected or connecting, skipping...",
         );
-        return await this.getServer();
+        // Check if we have a token before trying to get server
+        const token = getSavedToken();
+        if (!token) {
+          console.warn(
+            "[HyphaStore] Connected but no token available, forcing reconnection",
+          );
+          set((state) => ({
+            ...state,
+            isConnected: false,
+            isConnecting: false,
+          }));
+          currentServer = null;
+          // Continue with connection process below
+        } else {
+          const store = get() as any;
+          return await store.getServer();
+        }
       }
 
       set((state) => ({ ...state, isConnecting: true }));
@@ -375,6 +399,7 @@ export const useHyphaStore = createPersistStore(
     // Initialize default project for file uploads
     async initializeDefaultProject() {
       const state = get();
+      const store = get() as any; // Get store reference
       const token = getSavedToken();
 
       if (!token || !state.user) {
@@ -393,7 +418,7 @@ export const useHyphaStore = createPersistStore(
         console.log("[HyphaStore] Initializing default project...");
 
         // Get server connection
-        const server = await this.getServer();
+        const server = await store.getServer();
 
         // Get artifact manager from server
         const artifactManager = await server.getService(
@@ -499,42 +524,57 @@ export const useHyphaStore = createPersistStore(
       onProgress?: (progress: number) => void,
     ): Promise<void> {
       const state = get();
+      const store = get() as any; // Get store reference
 
       if (!state.defaultProject) {
-        await this.initializeDefaultProject();
+        await store.initializeDefaultProject();
       }
 
-      const server = await this.getServer();
-      const artifactManager = await server.getService(
-        "public/artifact-manager",
-      );
-
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("artifact_id", state.defaultProject!);
-      formData.append("version", "stage");
-
       try {
-        await artifactManager.put_file(
-          {
-            artifact_id: state.defaultProject!,
-            file_path: file.name,
-            version: "stage",
-            _upload_file: file,
-            _rkwargs: true,
-          },
-          {
-            onUploadProgress: (progressEvent: any) => {
-              if (onProgress && progressEvent.total) {
-                const progress = Math.round(
-                  (progressEvent.loaded * 100) / progressEvent.total,
-                );
-                onProgress(progress);
-              }
-            },
-          },
+        console.log(
+          "[HyphaStore] Uploading file to default project:",
+          file.name,
         );
 
+        const server = await store.getServer();
+        const artifactManager = await server.getService(
+          "public/artifact-manager",
+        );
+
+        // First, put the artifact into staging mode
+        console.log("[HyphaStore] Enabling staging mode for artifact...");
+        await artifactManager.edit({
+          artifact_id: state.defaultProject!,
+          stage: true,
+          _rkwargs: true,
+        });
+
+        // Report initial progress
+        if (onProgress) onProgress(25);
+
+        // Get presigned URL for upload
+        const putUrl = await artifactManager.put_file({
+          artifact_id: state.defaultProject!,
+          file_path: file.name,
+          _rkwargs: true,
+        });
+
+        if (onProgress) onProgress(50);
+
+        // Upload file using presigned URL
+        const response = await fetch(putUrl, {
+          method: "PUT",
+          body: file,
+          headers: {
+            "Content-Type": "",
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`Upload failed with status: ${response.status}`);
+        }
+
+        if (onProgress) onProgress(100);
         console.log("[HyphaStore] File uploaded successfully:", file.name);
       } catch (error) {
         console.error("[HyphaStore] Error uploading file:", error);
@@ -547,13 +587,14 @@ export const useHyphaStore = createPersistStore(
     // List files in default project
     async listProjectFiles(): Promise<any[]> {
       const state = get();
+      const store = get() as any; // Get store reference
 
       if (!state.defaultProject) {
         return [];
       }
 
       try {
-        const server = await this.getServer();
+        const server = await store.getServer();
         const artifactManager = await server.getService(
           "public/artifact-manager",
         );

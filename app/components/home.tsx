@@ -309,23 +309,50 @@ const useHyphaAgent = () => {
     }
 
     if (!hyphaAgent) {
-      try {
-        log.info(
-          "[useHyphaAgent] Creating new HyphaAgent with external server",
-        );
+      // Add a small delay to ensure token is properly saved
+      const initAgent = async () => {
+        try {
+          // Check if token is available before creating agent
+          const token = localStorage.getItem("token");
+          if (!token) {
+            log.warn(
+              "[useHyphaAgent] No token available, delaying agent creation",
+            );
+            return;
+          }
 
-        const agent = new HyphaAgentApi(
-          "https://hypha.aicell.io",
-          "hypha-agents/deno-app-engine",
-          () => store.getServer(), // Wrap in arrow function to preserve context
-        );
+          log.info(
+            "[useHyphaAgent] Creating new HyphaAgent with external server",
+          );
 
-        setHyphaAgent(agent);
-        log.info("[useHyphaAgent] HyphaAgent initialized successfully");
-      } catch (error) {
-        log.error("[useHyphaAgent] Failed to initialize HyphaAgent:", error);
+          const agent = new HyphaAgentApi(
+            "https://hypha.aicell.io",
+            "hypha-agents/deno-app-engine",
+            () => store.getServer(), // Wrap in arrow function to preserve context
+          );
+
+          setHyphaAgent(agent);
+          log.info("[useHyphaAgent] HyphaAgent initialized successfully");
+        } catch (error) {
+          log.error("[useHyphaAgent] Failed to initialize HyphaAgent:", error);
+        }
+      };
+
+      // Clear any existing timeout
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
       }
+
+      // Delay initialization slightly to ensure token is available
+      timeoutRef.current = setTimeout(initAgent, 100);
     }
+
+    // Cleanup timeout on unmount
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
   }, [user, isConnected, hyphaAgent, store]);
 
   return hyphaAgent;

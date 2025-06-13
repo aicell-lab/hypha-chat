@@ -35,11 +35,9 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const {
-    client,
     user,
     connect,
     setUser,
-    server,
     isConnecting,
     isConnected,
     disconnect,
@@ -80,29 +78,14 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     };
 
     try {
-      if (!client) {
-        const newClient = await hyphaWebsocketClient.connectToServer({
-          server_url: serverUrl,
-          client_id: "hypha-chat-client",
-        });
-
-        // Use the login method from the client
-        const token = await hyphaWebsocketClient.login(config);
-        localStorage.setItem("token", token);
-        localStorage.setItem(
-          "tokenExpiry",
-          new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
-        );
-        return token;
-      } else {
-        const token = await hyphaWebsocketClient.login(config);
-        localStorage.setItem("token", token);
-        localStorage.setItem(
-          "tokenExpiry",
-          new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
-        );
-        return token;
-      }
+      // Use the login method from the client
+      const token = await hyphaWebsocketClient.login(config);
+      localStorage.setItem("token", token);
+      localStorage.setItem(
+        "tokenExpiry",
+        new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString(),
+      );
+      return token;
     } catch (error) {
       console.error("Login failed:", error);
       return null;
@@ -110,6 +93,14 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
   };
 
   const handleLogin = useCallback(async () => {
+    if (isLoggingIn || isConnecting || isConnected) {
+      console.log(
+        "[LoginButton] Already logging in or connected, skipping manual login",
+      );
+      return;
+    }
+
+    console.log("[LoginButton] Starting manual login");
     setIsLoggingIn(true);
 
     try {
@@ -121,6 +112,10 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
           throw new Error("Failed to obtain token");
         }
       }
+
+      // Small delay to ensure token is saved to localStorage
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
       await connect({
         server_url: serverUrl,
         token: token,
@@ -141,13 +136,20 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
     } finally {
       setIsLoggingIn(false);
     }
-  }, [connect, initializeDefaultProject]);
+  }, [
+    connect,
+    initializeDefaultProject,
+    isLoggingIn,
+    isConnecting,
+    isConnected,
+  ]);
 
   // Auto-login on component mount if token exists
   useEffect(() => {
     const autoLogin = async () => {
       const token = getSavedToken();
-      if (token && !isConnected && !isConnecting) {
+      if (token && !isConnected && !isConnecting && !isLoggingIn) {
+        console.log("[LoginButton] Starting auto-login with existing token");
         setIsLoggingIn(true);
         try {
           await connect({
@@ -173,12 +175,20 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
       }
     };
 
-    autoLogin();
-  }, [connect, isConnected, isConnecting, initializeDefaultProject]);
+    // Delay auto-login slightly to avoid race conditions with manual login
+    const timeoutId = setTimeout(autoLogin, 50);
+    return () => clearTimeout(timeoutId);
+  }, [
+    connect,
+    isConnected,
+    isConnecting,
+    isLoggingIn,
+    initializeDefaultProject,
+  ]);
 
   // Debug effect to log connection state changes
   useEffect(() => {
-    if (server && user) {
+    if (isConnected && user) {
       console.log(
         "Login successful - User:",
         user.email,
@@ -186,7 +196,7 @@ export default function LoginButton({ className = "" }: LoginButtonProps) {
         isConnected,
       );
     }
-  }, [server, user, isConnected]);
+  }, [isConnected, user]);
 
   return (
     <div className={className}>

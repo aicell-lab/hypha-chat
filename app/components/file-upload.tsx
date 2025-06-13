@@ -21,11 +21,11 @@ interface ChatActionProps {
 
 export function FileUpload({ onFileUploaded }: FileUploadProps) {
   const {
-    artifactManager,
     defaultProject,
     user,
     isConnected,
     initializeDefaultProject,
+    uploadFileToProject: storeUploadFile,
   } = useHyphaStore();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -34,11 +34,6 @@ export function FileUpload({ onFileUploaded }: FileUploadProps) {
   const handleClick = async () => {
     if (!isConnected || !user) {
       showToast("Please log in to upload files");
-      return;
-    }
-
-    if (!artifactManager) {
-      showToast("Artifact manager not available. Please try reconnecting.");
       return;
     }
 
@@ -72,9 +67,12 @@ export function FileUpload({ onFileUploaded }: FileUploadProps) {
         await initializeDefaultProject();
       }
 
-      // Upload file
+      // Upload file with progress tracking
       setUploadProgress(25);
-      await uploadFileToProject(file);
+      await storeUploadFile(file, (progress: number) => {
+        setUploadProgress(25 + Math.round((progress / 100) * 65)); // Scale progress from 25% to 90%
+      });
+      setUploadProgress(90);
 
       setUploadProgress(100);
       showToast(`File "${file.name}" uploaded successfully!`);
@@ -95,44 +93,6 @@ export function FileUpload({ onFileUploaded }: FileUploadProps) {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-    }
-  };
-
-  const uploadFileToProject = async (file: File): Promise<void> => {
-    if (!artifactManager || !defaultProject) {
-      throw new Error("No artifact manager or default project available");
-    }
-
-    try {
-      console.log("[FileUpload] Uploading file to default project:", file.name);
-
-      // Get presigned URL for upload
-      const putUrl = await artifactManager.put_file({
-        artifact_id: defaultProject,
-        file_path: file.name,
-        _rkwargs: true,
-      });
-
-      setUploadProgress(50);
-
-      // Upload file
-      const response = await fetch(putUrl, {
-        method: "PUT",
-        body: file,
-        headers: {
-          "Content-Type": "",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Upload failed with status: ${response.status}`);
-      }
-
-      setUploadProgress(90);
-      console.log("[FileUpload] File uploaded successfully:", file.name);
-    } catch (error) {
-      console.error("[FileUpload] Error uploading file:", error);
-      throw error;
     }
   };
 

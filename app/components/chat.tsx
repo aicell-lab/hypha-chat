@@ -454,13 +454,7 @@ function ChatAction(props: {
 }
 
 function FileUploadAction() {
-  const {
-    defaultProject,
-    user,
-    isConnected,
-    initializeDefaultProject,
-    getServer,
-  } = useHyphaStore();
+  const { user, isConnected, uploadFileToProject } = useHyphaStore();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -495,14 +489,10 @@ function FileUploadAction() {
       setIsUploading(true);
       setUploadProgress(0);
 
-      // Ensure default project exists
-      if (!defaultProject) {
-        setUploadProgress(10);
-        await initializeDefaultProject();
-      }
-
-      // Upload file with progress tracking
-      await uploadFileToProject(file);
+      // Upload file with progress tracking using store function
+      await uploadFileToProject(file, (progress: number) => {
+        setUploadProgress(progress);
+      });
 
       showToast(`File "${file.name}" uploaded successfully!`);
     } catch (error) {
@@ -517,53 +507,6 @@ function FileUploadAction() {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-    }
-  };
-
-  const uploadFileToProject = async (file: File): Promise<void> => {
-    if (!defaultProject) {
-      throw new Error("No default project available");
-    }
-
-    try {
-      console.log("[FileUpload] Uploading file to default project:", file.name);
-
-      // Get server connection
-      const server = await getServer();
-
-      // Get artifact manager from server
-      const artifactManager = await server.getService(
-        "public/artifact-manager",
-      );
-
-      // Get presigned URL for upload
-      setUploadProgress(25);
-      const putUrl = await artifactManager.put_file({
-        artifact_id: defaultProject,
-        file_path: file.name,
-        _rkwargs: true,
-      });
-
-      setUploadProgress(50);
-
-      // Upload file
-      const response = await fetch(putUrl, {
-        method: "PUT",
-        body: file,
-        headers: {
-          "Content-Type": "",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Upload failed with status: ${response.status}`);
-      }
-
-      setUploadProgress(90);
-      console.log("[FileUpload] File uploaded successfully:", file.name);
-    } catch (error) {
-      console.error("[FileUpload] Error uploading file:", error);
-      throw error;
     }
   };
 
@@ -808,7 +751,7 @@ function _Chat() {
   const hyphaAgent = useContext(HyphaAgentContext);
 
   const models = config.models;
-  const { resources, isConnected, user } = useHyphaStore();
+  const { resources, isConnected, user, fetchResources } = useHyphaStore();
 
   // Memoize selected agent resource to prevent unnecessary re-renders
   const selectedAgentResource = useMemo(() => {
@@ -906,6 +849,27 @@ function _Chat() {
     }
   }, [config.modelClientType]);
 
+  // Fetch resources when user connects
+  useEffect(() => {
+    if (
+      config.modelClientType === ModelClient.HYPHA_AGENT &&
+      isConnected &&
+      user &&
+      resources.length === 0
+    ) {
+      console.log("[Chat] Fetching agent resources...");
+      fetchResources(1).catch((error) => {
+        console.error("[Chat] Failed to fetch resources:", error);
+      });
+    }
+  }, [
+    config.modelClientType,
+    isConnected,
+    user,
+    resources.length,
+    fetchResources,
+  ]);
+
   // Create agent automatically when using Hypha Agent client
   useEffect(() => {
     if (config.modelClientType !== ModelClient.HYPHA_AGENT || !hyphaAgent) {
@@ -939,6 +903,28 @@ function _Chat() {
 
     if (!selectedAgentResource) {
       console.log("[Chat] No agent resource selected");
+
+      // Auto-select the first available agent if none is selected
+      if (resources.length > 0 && !selectedAgent) {
+        const firstAgent = resources.find((r) =>
+          r.manifest.type?.includes("agent"),
+        );
+
+        if (firstAgent) {
+          console.log(
+            "[Chat] Auto-selecting first available agent:",
+            firstAgent.id,
+          );
+          config.updateModelConfig({
+            selectedAgent: {
+              id: firstAgent.id,
+              name: firstAgent.manifest.name || firstAgent.name,
+            },
+          });
+          return; // Exit and let the effect re-run with the selected agent
+        }
+      }
+
       setIsAgentReady(false);
       return;
     }

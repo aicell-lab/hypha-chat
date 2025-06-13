@@ -588,6 +588,10 @@ export class HyphaAgentApi implements LLMApi {
           const functionName = chunk.name || "unknown_function";
           const callId = chunk.call_id || `call_${Date.now()}`;
 
+          // Close any unclosed script tags before adding execution message
+          accumulatedContent =
+            this.closeUnfinishedScriptTags(accumulatedContent);
+
           // Add emoji-enhanced function call to accumulated content
           const executionMessage = `\n\n🚀 **Executing ${functionName}**\n`;
           accumulatedContent += executionMessage;
@@ -788,6 +792,42 @@ export class HyphaAgentApi implements LLMApi {
     // Reset connection state to force re-initialization with new provider
     this.server = null;
     this.isConnected = false;
+  }
+
+  // Close any unfinished script tags in content during streaming
+  private closeUnfinishedScriptTags(content: string): string {
+    // List of script tags we need to check for
+    const scriptTags = [
+      "py-script",
+      "t-script",
+      "javascript",
+      "thoughts",
+      "thinking",
+    ];
+
+    let processedContent = content;
+
+    // Check each script tag type
+    for (const tag of scriptTags) {
+      // Find all opening tags
+      const openTagRegex = new RegExp(`<${tag}[^>]*>`, "gi");
+      const closeTagRegex = new RegExp(`</${tag}>`, "gi");
+
+      const openMatches = content.match(openTagRegex) || [];
+      const closeMatches = content.match(closeTagRegex) || [];
+
+      // If we have more opening tags than closing tags, we need to close them
+      const unclosedCount = openMatches.length - closeMatches.length;
+
+      if (unclosedCount > 0) {
+        // Add the missing closing tags at the end
+        for (let i = 0; i < unclosedCount; i++) {
+          processedContent += `</${tag}>`;
+        }
+      }
+    }
+
+    return processedContent;
   }
 
   // Format function execution summary as collapsible markdown with proper spacing

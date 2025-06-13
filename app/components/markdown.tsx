@@ -136,10 +136,48 @@ function escapeBrackets(text: string) {
   );
 }
 
+function closeUnfinishedScriptTags(content: string): string {
+  // List of script tags we need to check for
+  const scriptTags = [
+    "py-script",
+    "t-script",
+    "javascript",
+    "thoughts",
+    "thinking",
+  ];
+
+  let processedContent = content;
+
+  // Check each script tag type
+  for (const tag of scriptTags) {
+    // Find all opening tags
+    const openTagRegex = new RegExp(`<${tag}[^>]*>`, "gi");
+    const closeTagRegex = new RegExp(`</${tag}>`, "gi");
+
+    const openMatches = content.match(openTagRegex) || [];
+    const closeMatches = content.match(closeTagRegex) || [];
+
+    // If we have more opening tags than closing tags, we need to close them
+    const unclosedCount = openMatches.length - closeMatches.length;
+
+    if (unclosedCount > 0) {
+      // Add the missing closing tags at the end
+      for (let i = 0; i < unclosedCount; i++) {
+        processedContent += `</${tag}>`;
+      }
+    }
+  }
+
+  return processedContent;
+}
+
 function _MarkDownContent(props: { content: string }) {
+  // Close any unfinished script tags before processing
+  const contentWithClosedTags = closeUnfinishedScriptTags(props.content);
+
   const escapedContent = useMemo(() => {
-    return escapeBrackets(escapeDollarNumber(props.content));
-  }, [props.content]);
+    return escapeBrackets(escapeDollarNumber(contentWithClosedTags));
+  }, [contentWithClosedTags]);
 
   return (
     <ReactMarkdown

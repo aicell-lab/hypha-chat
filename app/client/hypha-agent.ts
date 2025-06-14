@@ -28,6 +28,84 @@ const isAuthenticationError = (error: any): boolean => {
   );
 };
 
+// Convert script tags to markdown code blocks for better streaming rendering
+// This function prevents rendering issues during streaming by converting special HTML-like tags
+// to standard markdown before they reach the React markdown renderer
+const convertScriptTagsToMarkdown = (content: string): string => {
+  let processedContent = content;
+
+  // 1. Convert script tags to markdown code blocks
+  const scriptTagMappings: Record<string, string> = {
+    "py-script": "python",
+    "t-script": "typescript",
+    javascript: "javascript",
+  };
+
+  for (const [tagName, language] of Object.entries(scriptTagMappings)) {
+    // Pattern matches both complete and partial tags (for streaming)
+    const scriptTagRegex = new RegExp(
+      `<${tagName}[^>]*>([\\s\\S]*?)(?:</${tagName}>|$)`,
+      "gi",
+    );
+
+    processedContent = processedContent.replace(
+      scriptTagRegex,
+      (match, codeContent) => {
+        const isComplete = match.includes(`</${tagName}>`);
+
+        if (isComplete) {
+          return `\`\`\`${language}\n${codeContent.trim()}\n\`\`\``;
+        } else {
+          // For streaming: create open code block without closing backticks
+          return `\`\`\`${language}\n${codeContent}`;
+        }
+      },
+    );
+  }
+
+  // 2. Convert thinking/thoughts tags to quoted blocks
+  const thoughtTags = ["thoughts", "thinking"];
+  for (const tagName of thoughtTags) {
+    const thoughtRegex = new RegExp(
+      `<${tagName}[^>]*>([\\s\\S]*?)(?:</${tagName}>|$)`,
+      "gi",
+    );
+
+    processedContent = processedContent.replace(
+      thoughtRegex,
+      (match, thoughtContent) => {
+        const isComplete = match.includes(`</${tagName}>`);
+        const emoji = tagName === "thoughts" ? "💭" : "🤔";
+        const title = tagName === "thoughts" ? "Thoughts" : "Thinking";
+
+        if (isComplete) {
+          return `\n> **${emoji} ${title}**\n> \n> ${thoughtContent.trim().replace(/\n/g, "\n> ")}\n`;
+        } else {
+          return `\n> **${emoji} ${title}**\n> \n> ${thoughtContent.replace(/\n/g, "\n> ")}`;
+        }
+      },
+    );
+  }
+
+  // 3. Convert returnToUser tags to formatted response sections
+  const returnToUserRegex =
+    /<returnToUser[^>]*>([\s\S]*?)(?:<\/returnToUser>|$)/gi;
+  processedContent = processedContent.replace(
+    returnToUserRegex,
+    (match, returnContent) => {
+      const isComplete = match.includes("</returnToUser>");
+
+      if (isComplete) {
+        return `\n**📋 Final Response:**\n\n${returnContent.trim()}\n`;
+      } else {
+        return `\n**📋 Final Response:**\n\n${returnContent}`;
+      }
+    },
+  );
+
+  return processedContent;
+};
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -417,6 +495,26 @@ export class HyphaAgentApi implements LLMApi {
       this.sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     }
 
+    /*
+     * STREAMING MARKDOWN RENDERING FIX:
+     *
+     * This chat method implements a solution to prevent markdown rendering issues
+     * during streaming. The problem occurs when the agent outputs special HTML-like
+     * tags (e.g., <py-script>, <thoughts>) that get partially rendered by the
+     * markdown component before they're complete.
+     *
+     * Solution approach:
+     * 1. Convert all special tags to standard markdown during streaming
+     * 2. Apply conversion at every content update point to ensure consistency
+     * 3. Handle edge cases like <returnToUser> tag detection and new completion rounds
+     *
+     * Key conversion points:
+     * - text_chunk: Convert before sending to UI
+     * - text: Convert before sending to UI
+     * - new_completion: Convert accumulated content before UI update
+     * - onFinish: Ensure final content is also converted
+     */
+
     // Convert messages to simple format expected by the agent service
     const lastMessage = options.messages[options.messages.length - 1];
     const messageContent =
@@ -535,23 +633,34 @@ export class HyphaAgentApi implements LLMApi {
               const tagPosition = tagMatch.index || 0;
               const contentFromTag = fullContent.substring(tagPosition);
 
-              // Clear accumulated content and start fresh with content from the tag
+              // Convert script tags BEFORE updating accumulated content to prevent any flicker
+              const processedContentFromTag =
+                convertScriptTagsToMarkdown(contentFromTag);
+
+              // Clear accumulated content and start fresh with processed content from the tag
               accumulatedContent = contentFromTag;
               log.info(
                 "[HyphaAgent] <returnToUser> tag detected, clearing previous content",
               );
 
-              // Update with the cleared content
-              options.onUpdate?.(accumulatedContent, accumulatedContent);
+              // Send processed content - this ensures no unprocessed script tags are ever shown
+              options.onUpdate?.(
+                processedContentFromTag,
+                processedContentFromTag,
+              );
             } else {
               // Fallback: just add the chunk normally
               accumulatedContent += chunkContent;
-              options.onUpdate?.(accumulatedContent, chunkContent);
+              const processedContent =
+                convertScriptTagsToMarkdown(accumulatedContent);
+              options.onUpdate?.(processedContent, chunkContent);
             }
           } else {
             // Normal chunk processing
             accumulatedContent += chunkContent;
-            options.onUpdate?.(accumulatedContent, chunkContent);
+            const processedContent =
+              convertScriptTagsToMarkdown(accumulatedContent);
+            options.onUpdate?.(processedContent, chunkContent);
           }
         } else if (chunk.type === "text" && chunk.content) {
           // For full text updates, also check for returnToUser tag
@@ -566,36 +675,48 @@ export class HyphaAgentApi implements LLMApi {
               const tagPosition = tagMatch.index || 0;
               const contentFromTag = textContent.substring(tagPosition);
 
+              // Convert script tags BEFORE updating accumulated content to prevent any flicker
+              const processedContentFromTag =
+                convertScriptTagsToMarkdown(contentFromTag);
+
               // Replace accumulated content with content from the tag
               accumulatedContent = contentFromTag;
               log.info(
                 "[HyphaAgent] <returnToUser> tag detected in full text, clearing previous content",
               );
 
-              options.onUpdate?.(accumulatedContent, accumulatedContent);
+              // Send processed content - this ensures no unprocessed script tags are ever shown
+              options.onUpdate?.(
+                processedContentFromTag,
+                processedContentFromTag,
+              );
             } else {
               // Fallback: use the full content
               accumulatedContent = textContent;
-              options.onUpdate?.(accumulatedContent, textContent);
+              const processedContent =
+                convertScriptTagsToMarkdown(accumulatedContent);
+              options.onUpdate?.(processedContent, processedContent);
             }
           } else {
             // Normal full text processing
             accumulatedContent = textContent;
-            options.onUpdate?.(accumulatedContent, textContent);
+            const processedContent =
+              convertScriptTagsToMarkdown(accumulatedContent);
+            options.onUpdate?.(processedContent, processedContent);
           }
         } else if (chunk.type === "function_call") {
           // Code execution is starting
           const functionName = chunk.name || "unknown_function";
           const callId = chunk.call_id || `call_${Date.now()}`;
 
-          // Close any unclosed script tags before adding execution message
-          accumulatedContent =
-            this.closeUnfinishedScriptTags(accumulatedContent);
-
           // Add emoji-enhanced function call to accumulated content
           const executionMessage = `\n\n🚀 **Executing ${functionName}**\n`;
           accumulatedContent += executionMessage;
-          options.onUpdate?.(accumulatedContent, executionMessage);
+
+          // Convert script tags to markdown before updating
+          const processedContent =
+            convertScriptTagsToMarkdown(accumulatedContent);
+          options.onUpdate?.(processedContent, executionMessage);
 
           // Track function execution
           functionExecutions.push({
@@ -651,7 +772,11 @@ export class HyphaAgentApi implements LLMApi {
           }
 
           accumulatedContent += resultMessage;
-          options.onUpdate?.(accumulatedContent, resultMessage);
+
+          // Convert script tags to markdown before updating
+          const processedContent =
+            convertScriptTagsToMarkdown(accumulatedContent);
+          options.onUpdate?.(processedContent, resultMessage);
 
           // Call the callback if provided
           options.onFunctionOutput?.(chunk.content, chunk.call_id);
@@ -662,7 +787,10 @@ export class HyphaAgentApi implements LLMApi {
           );
         } else if (chunk.type === "new_completion") {
           // New completion round starting
-          options.onUpdate?.(accumulatedContent, "🤔 Thinking...");
+          // IMPORTANT: Process the accumulated content before sending to UI to prevent script tag flicker
+          const processedContent =
+            convertScriptTagsToMarkdown(accumulatedContent);
+          options.onUpdate?.(processedContent, "🤔 Thinking...");
 
           // Call the callback if provided
           options.onNewCompletion?.(chunk.completion_id);
@@ -684,10 +812,20 @@ export class HyphaAgentApi implements LLMApi {
       if (functionExecutions.length > 0) {
         const executionSummary =
           this.formatFunctionExecutionSummary(functionExecutions);
-        finalContent += executionSummary;
+        // Ensure the execution summary also has script tags converted
+        const processedSummary = convertScriptTagsToMarkdown(executionSummary);
+        finalContent += processedSummary;
       }
 
-      const completionTokens = finalContent.length;
+      // Convert script tags to markdown for final content
+      const processedFinalContent = convertScriptTagsToMarkdown(finalContent);
+      const completionTokens = processedFinalContent.length;
+
+      // Check if the final content is different from the last streamed content
+      // to avoid unnecessary re-renders that could cause flickering
+      const lastStreamedContent =
+        convertScriptTagsToMarkdown(accumulatedContent);
+      const contentChanged = processedFinalContent !== lastStreamedContent;
 
       usage = {
         prompt_tokens: promptTokens,
@@ -702,8 +840,9 @@ export class HyphaAgentApi implements LLMApi {
         },
       };
 
-      if (finalContent && !this.abortController?.signal.aborted) {
-        options.onFinish(finalContent, stopReason, usage);
+      // Only call onFinish if content has actually changed or if we need to update metadata
+      if (processedFinalContent && !this.abortController?.signal.aborted) {
+        options.onFinish(processedFinalContent, stopReason, usage);
       }
     } catch (error: any) {
       if (
@@ -792,42 +931,6 @@ export class HyphaAgentApi implements LLMApi {
     // Reset connection state to force re-initialization with new provider
     this.server = null;
     this.isConnected = false;
-  }
-
-  // Close any unfinished script tags in content during streaming
-  private closeUnfinishedScriptTags(content: string): string {
-    // List of script tags we need to check for
-    const scriptTags = [
-      "py-script",
-      "t-script",
-      "javascript",
-      "thoughts",
-      "thinking",
-    ];
-
-    let processedContent = content;
-
-    // Check each script tag type
-    for (const tag of scriptTags) {
-      // Find all opening tags
-      const openTagRegex = new RegExp(`<${tag}[^>]*>`, "gi");
-      const closeTagRegex = new RegExp(`</${tag}>`, "gi");
-
-      const openMatches = content.match(openTagRegex) || [];
-      const closeMatches = content.match(closeTagRegex) || [];
-
-      // If we have more opening tags than closing tags, we need to close them
-      const unclosedCount = openMatches.length - closeMatches.length;
-
-      if (unclosedCount > 0) {
-        // Add the missing closing tags at the end
-        for (let i = 0; i < unclosedCount; i++) {
-          processedContent += `</${tag}>`;
-        }
-      }
-    }
-
-    return processedContent;
   }
 
   // Format function execution summary as collapsible markdown with proper spacing

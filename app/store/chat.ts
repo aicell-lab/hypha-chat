@@ -366,6 +366,9 @@ export const useChatStore = createPersistStore(
               if (!this.config.enable_thinking) {
                 message = message.replace(/<think>\s*<\/think>/g, "");
               }
+              // Note: For Hypha Agent, the message is already processed by convertScriptTagsToMarkdown
+              // in hypha-agent.ts, so we don't need to process it again here.
+              // For other LLM clients, script tags should not appear in the content.
               botMessage.content = message;
               get().onNewMessage(botMessage, llm);
             }

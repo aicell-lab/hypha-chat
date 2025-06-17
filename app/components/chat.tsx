@@ -1598,29 +1598,37 @@ function _Chat() {
                   fontWeight: "500",
                   backgroundColor: agentError
                     ? "#fef2f2"
-                    : isAgentReady
-                      ? "#f0fdf4"
-                      : "#fef3c7",
+                    : isStreaming
+                      ? "#eff6ff"
+                      : isAgentReady
+                        ? "#f0fdf4"
+                        : "#fef3c7",
                   color: agentError
                     ? "#dc2626"
-                    : isAgentReady
-                      ? "#16a34a"
-                      : "#d97706",
-                  border: `1px solid ${agentError ? "#fecaca" : isAgentReady ? "#bbf7d0" : "#fed7aa"}`,
+                    : isStreaming
+                      ? "#2563eb"
+                      : isAgentReady
+                        ? "#16a34a"
+                        : "#d97706",
+                  border: `1px solid ${agentError ? "#fecaca" : isStreaming ? "#c7d2fe" : isAgentReady ? "#bbf7d0" : "#fed7aa"}`,
                 }}
                 title={
                   agentError
                     ? `Agent Error: ${agentError}`
-                    : isAgentReady
-                      ? "Agent is ready"
-                      : "Agent is starting up"
+                    : isStreaming
+                      ? "Agent is thinking and responding"
+                      : isAgentReady
+                        ? "Agent is ready"
+                        : "Agent is starting up"
                 }
               >
                 {agentError
                   ? "🔴 Agent Error"
-                  : isAgentReady
-                    ? "🟢 Agent Ready"
-                    : "🟡 Starting..."}
+                  : isStreaming
+                    ? "🧠 Agent is thinking..."
+                    : isAgentReady
+                      ? "🟢 Agent Ready"
+                      : "🟡 Starting..."}
               </span>
             )}
           </div>

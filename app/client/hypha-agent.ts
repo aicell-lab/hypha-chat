@@ -1141,8 +1141,8 @@ export class HyphaAgentApi implements LLMApi {
           const functionName = chunk.name || "unknown_function";
           const callId = chunk.call_id || `call_${Date.now()}`;
 
-          // Add emoji-enhanced function call to accumulated content
-          const executionMessage = `\n\n🚀 **Executing ${functionName}**\n`;
+          // Add emoji-enhanced function call to accumulated content with spinner
+          const executionMessage = `\n\n🚀 **Executing ${functionName} tool** <span class="execution-spinner">🔄</span>\n`;
           accumulatedContent += executionMessage;
 
           // Convert script tags to markdown before updating
@@ -1168,7 +1168,7 @@ export class HyphaAgentApi implements LLMApi {
           options.onFunctionCall?.(chunk.name, chunk.arguments, chunk.call_id);
 
           console.log(
-            `🚀 Executing ${chunk.name} with call_id: ${chunk.call_id}`,
+            `🚀 Executing ${chunk.name} tool with call_id: ${chunk.call_id}`,
           );
         } else if (chunk.type === "function_call_output") {
           // Code execution completed with results
@@ -1182,6 +1182,23 @@ export class HyphaAgentApi implements LLMApi {
           if (execution) {
             execution.output = output;
           }
+
+          // Replace the spinner with completion status in the accumulated content
+          // Find and replace the execution message for this specific function call
+          const functionNameEscaped = (execution?.name || "function").replace(
+            /[.*+?^${}()|[\]\\]/g,
+            "\\$&",
+          );
+          const executionPattern = new RegExp(
+            `🚀 \\*\\*Executing ${functionNameEscaped} tool\\*\\* <span class="execution-spinner">🔄</span>`,
+            "g",
+          );
+
+          // Replace the spinner with completed status
+          accumulatedContent = accumulatedContent.replace(
+            executionPattern,
+            `🚀 **Executing ${execution?.name || "function"} tool** ✅`,
+          );
 
           // Format and display the results
           let resultMessage = `\n✅ **Execution completed**\n\n`;

@@ -174,24 +174,46 @@ const useWebLLM = () => {
 
   const isWebllmInitialized = useRef(false);
 
-  // If service worker registration timeout, fall back to web worker
-  const timeout = setTimeout(() => {
-    if (!isWebllmInitialized.current && !isWebllmActive && !webllm) {
-      log.info(
-        "Service Worker activation is timed out. Falling back to use web worker.",
-      );
-      setWebLLM(new WebLLMApi("webWorker", config.logLevel));
-      setWebllmAlive(true);
-    }
-  }, 2_000);
+  // Only initialize WebLLM if we're using the WebLLM client
+  const shouldUseWebLLM = config.modelClientType === ModelClient.WEBLLM;
 
-  // Initialize WebLLM engine
+  // If service worker registration timeout, fall back to web worker
+  const timeout = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
+    // Clear any existing timeout
+    if (timeout.current) {
+      clearTimeout(timeout.current);
+      timeout.current = null;
+    }
+
+    // Don't initialize WebLLM for Hypha agents
+    if (!shouldUseWebLLM) {
+      // Clean up existing WebLLM if we switched away from it
+      if (webllm) {
+        setWebLLM(undefined);
+        setWebllmAlive(false);
+        isWebllmInitialized.current = false;
+      }
+      return;
+    }
+
     // Prevent duplicate initialization
     if (isWebllmInitialized.current || webllm || isWebllmActive) {
       return;
     }
 
+    timeout.current = setTimeout(() => {
+      if (!isWebllmInitialized.current && !isWebllmActive && !webllm) {
+        log.info(
+          "Service Worker activation is timed out. Falling back to use web worker.",
+        );
+        setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+        setWebllmAlive(true);
+      }
+    }, 2_000);
+
+    // Initialize WebLLM engine
     if ("serviceWorker" in navigator) {
       log.info("Service Worker API is available and in use.");
       navigator.serviceWorker.ready.then(() => {
@@ -200,86 +222,93 @@ const useWebLLM = () => {
           return;
         }
 
-        log.info("Service Worker is activated.");
-        // Check whether WebGPU is available in Service Worker
-        const request = {
-          kind: "checkWebGPUAvilability",
-          uuid: crypto.randomUUID(),
-          content: "",
-        };
-
-        const sendEventInterval = setInterval(() => {
-          navigator.serviceWorker.controller?.postMessage(request);
-        }, 200);
+        // Clear timeout since we're proceeding with service worker
+        if (timeout.current) {
+          clearTimeout(timeout.current);
+          timeout.current = null;
+        }
 
         const webGPUCheckCallback = (event: MessageEvent) => {
-          const message = event.data;
-          if (message.kind === "return" && message.uuid === request.uuid) {
-            const isWebGPUAvailable = message.content;
-            log.info(
-              isWebGPUAvailable
-                ? "Service Worker has WebGPU Available."
-                : "Service Worker does not have available WebGPU.",
-            );
-            if (!webllm && !isWebllmActive && !isWebllmInitialized.current) {
-              setWebLLM(
-                new WebLLMApi(
-                  isWebGPUAvailable ? "serviceWorker" : "webWorker",
-                  config.logLevel,
-                ),
-              );
-              setWebllmAlive(true);
-              isWebllmInitialized.current = true;
-              clearTimeout(timeout);
-            }
+          if (event.data.kind === "return" && isWebllmInitialized.current) {
+            return;
+          }
+          if (event.data.kind === "return" && event.data.success == false) {
+            log.error("WebGPU check failed", event.data.error);
             navigator.serviceWorker.removeEventListener(
               "message",
               webGPUCheckCallback,
             );
-            clearInterval(sendEventInterval);
+            setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+            setWebllmAlive(true);
+          } else if (
+            event.data.kind === "return" &&
+            event.data.success == true
+          ) {
+            log.info("WebGPU check success");
+            navigator.serviceWorker.removeEventListener(
+              "message",
+              webGPUCheckCallback,
+            );
+            setWebLLM(new WebLLMApi("serviceWorker", config.logLevel));
+            setWebllmAlive(true);
           }
         };
         navigator.serviceWorker.addEventListener(
           "message",
           webGPUCheckCallback,
         );
+        navigator.serviceWorker.ready.then((registration) => {
+          if (registration.active) {
+            registration.active.postMessage({
+              kind: "webgpu_check",
+            });
+            isWebllmInitialized.current = true;
+          }
+        });
       });
     } else {
-      log.info(
-        "Service Worker API is unavailable. Falling back to use web worker.",
-      );
-      if (!isWebllmInitialized.current && !webllm && !isWebllmActive) {
-        setWebLLM(new WebLLMApi("webWorker", config.logLevel));
-        setWebllmAlive(true);
-        isWebllmInitialized.current = true;
-        clearTimeout(timeout);
-      }
+      log.info("Service Worker API is not available. Using web worker.");
+      setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+      setWebllmAlive(true);
     }
-  }, []);
 
-  // if (webllm?.webllm.type === "serviceWorker") {
-  //   setInterval(() => {
-  //     if (webllm) {
-  //       // 10s per heartbeat, dead after 30 seconds of inactivity
-  //       setWebllmAlive(
-  //         !!webllm.webllm.engine &&
-  //           (webllm.webllm.engine as ServiceWorkerMLCEngine).missedHeatbeat < 3,
-  //       );
-  //     }
-  //   }, 10_000);
-  // }
-  return { webllm, isWebllmActive };
+    // Cleanup function
+    return () => {
+      if (timeout.current) {
+        clearTimeout(timeout.current);
+        timeout.current = null;
+      }
+    };
+  }, [shouldUseWebLLM, config.logLevel]); // Add shouldUseWebLLM as dependency
+
+  return {
+    webllm: shouldUseWebLLM ? webllm : undefined,
+    isWebllmActive: shouldUseWebLLM ? isWebllmActive : false,
+  };
 };
 
 const useMlcLLM = () => {
   const config = useAppConfig();
-  const [mlcllm, setMlcLlm] = useState<MlcLLMApi | undefined>(undefined);
+  const [mlcllm, setMlcLLM] = useState<MlcLLMApi | undefined>(undefined);
+
+  // Only initialize MLCLLM if we're using the MLCLLM client
+  const shouldUseMlcLLM = config.modelClientType === ModelClient.MLCLLM_API;
 
   useEffect(() => {
-    setMlcLlm(new MlcLLMApi(config.modelConfig.mlc_endpoint));
-  }, [config.modelConfig.mlc_endpoint, setMlcLlm]);
+    if (!shouldUseMlcLLM) {
+      // Clean up existing MLCLLM if we switched away from it
+      if (mlcllm) {
+        setMlcLLM(undefined);
+      }
+      return;
+    }
 
-  return mlcllm;
+    if (!mlcllm) {
+      setMlcLLM(new MlcLLMApi(config.modelConfig.mlc_endpoint));
+    }
+  }, [shouldUseMlcLLM, mlcllm]);
+
+  return shouldUseMlcLLM ? mlcllm : undefined;
 };
 
 const useHyphaAgent = () => {

@@ -8,6 +8,7 @@ import React, {
   Fragment,
   RefObject,
   useContext,
+  memo,
 } from "react";
 
 import ShareIcon from "../icons/share.svg";
@@ -453,13 +454,13 @@ function ChatAction(props: {
   );
 }
 
-function FileUploadAction() {
+const FileUploadAction = memo(function FileUploadAction() {
   const { user, isConnected, uploadFileToProject } = useHyphaStore();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleClick = async () => {
+  const handleClick = useCallback(async () => {
     if (!isConnected || !user) {
       showToast("Please log in to upload files");
       return;
@@ -468,56 +469,57 @@ function FileUploadAction() {
     if (fileInputRef.current) {
       fileInputRef.current.click();
     }
-  };
+  }, [isConnected, user]);
 
-  const handleFileChange = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
+  const handleFileChange = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0) return;
 
-    const file = files[0];
+      const file = files[0];
 
-    // File size limit (10MB)
-    const maxSize = 10 * 1024 * 1024;
-    if (file.size > maxSize) {
-      showToast("File too large. Maximum size is 10MB.");
-      return;
-    }
-
-    try {
-      setIsUploading(true);
-      setUploadProgress(0);
-
-      // Upload file with progress tracking using store function
-      await uploadFileToProject(file, (progress: number) => {
-        setUploadProgress(progress);
-      });
-
-      showToast(`File "${file.name}" uploaded successfully!`);
-    } catch (error) {
-      console.error("File upload failed:", error);
-      showToast(
-        `Upload failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
-    } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      // File size limit (10MB)
+      const maxSize = 10 * 1024 * 1024;
+      if (file.size > maxSize) {
+        showToast("File too large. Maximum size is 10MB.");
+        return;
       }
-    }
-  };
 
-  const getText = () => {
+      try {
+        setIsUploading(true);
+        setUploadProgress(0);
+
+        // Upload file with progress tracking using store function
+        await uploadFileToProject(file, (progress: number) => {
+          setUploadProgress(progress);
+        });
+
+        showToast(`File "${file.name}" uploaded successfully!`);
+      } catch (error) {
+        console.error("File upload failed:", error);
+        showToast(
+          `Upload failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
+      } finally {
+        setIsUploading(false);
+        setUploadProgress(0);
+        // Reset file input
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+      }
+    },
+    [uploadFileToProject],
+  );
+
+  const getText = useMemo(() => {
     if (isUploading) {
       return `Uploading... ${uploadProgress}%`;
     }
     return Locale.Chat.InputActions.UploadFile;
-  };
+  }, [isUploading, uploadProgress]);
 
-  const getIcon = () => {
+  const getIcon = useMemo(() => {
     if (isUploading) {
       return <LoadingButtonIcon />;
     }
@@ -536,7 +538,7 @@ function FileUploadAction() {
         <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66L9.48 16.35a2 2 0 0 1-2.83-2.83l8.36-8.36" />
       </svg>
     );
-  };
+  }, [isUploading]);
 
   return (
     <>
@@ -548,10 +550,10 @@ function FileUploadAction() {
         accept="*/*"
         aria-label="Upload file"
       />
-      <ChatAction onClick={handleClick} text={getText()} icon={getIcon()} />
+      <ChatAction onClick={handleClick} text={getText} icon={getIcon} />
     </>
   );
-}
+});
 
 const INITIALIZATION_SCRIPT = ``;
 
@@ -1193,11 +1195,13 @@ function _Chat() {
 
     return baseMessages.concat(previewMessage);
   }, [
-    config.sendPreviewBubble,
-    context,
-    session.messages,
+    // More specific dependencies to avoid unnecessary re-renders
+    context.length,
     session.messages.length,
-    userInput,
+    session.messages, // Keep this but it will only trigger when messages actually change
+    userInput.length > 0 ? userInput : "", // Only re-render when userInput changes meaningfully
+    config.sendPreviewBubble,
+    session.id, // Add session ID to ensure we re-render when switching sessions
   ]);
 
   const [msgRenderIndex, _setMsgRenderIndex] = useState(
@@ -1295,22 +1299,18 @@ function _Chat() {
         ? hyphaAgent
         : webllm;
 
-  // Early return if LLM is not available - moved after all hooks
-  // For HYPHA_AGENT, only show loading if user is authenticated but agent not ready
-  if (!llm) {
-    if (config.modelClientType === ModelClient.HYPHA_AGENT) {
-      // If user is not authenticated, don't show loading - let them see the login interface
-      if (!isConnected || !user) {
-        // Continue to render the chat interface which will show login button
-      } else {
-        // User is authenticated but agent not ready - show loading
-        return <div>Loading LLM...</div>;
-      }
-    } else {
-      // For other client types, always show loading if LLM not available
-      return <div>Loading LLM...</div>;
-    }
-  }
+  // Clear attached images when switching sessions or on unmount
+  useEffect(() => {
+    return () => {
+      // Clear images when component unmounts or session changes
+      setAttachImages([]);
+    };
+  }, [session.id]);
+
+  // Auto-clear images after successful submission to prevent memory accumulation
+  const clearAttachedImages = useCallback(() => {
+    setAttachImages([]);
+  }, []);
 
   // only search prompts when user input is short
   const SEARCH_TEXT_LIMIT = 30;
@@ -1354,13 +1354,30 @@ function _Chat() {
     if (llm) {
       chatStore.onUserInput(userInput, llm, attachImages);
     }
-    setAttachImages([]);
+    clearAttachedImages(); // Clear images immediately after submission
     localStorage.setItem(LAST_INPUT_KEY, userInput);
     setUserInput("");
     setPromptHints([]);
     if (!isMobileScreen) inputRef.current?.focus();
     setAutoScroll(true);
   };
+
+  // Early return checks - moved after all hooks
+  // For HYPHA_AGENT, only show loading if user is authenticated but agent not ready
+  if (!llm && config.modelClientType !== ModelClient.HYPHA_AGENT) {
+    return <div>Loading LLM...</div>;
+  }
+
+  // For HYPHA_AGENT client type, we don't need WebLLM/MLCLLM
+  if (config.modelClientType === ModelClient.HYPHA_AGENT) {
+    // If user is not authenticated, don't show loading - let them see the login interface
+    if (!isConnected || !user) {
+      // Continue to render the chat interface which will show login button
+    } else if (!hyphaAgent) {
+      // User is authenticated but agent service not ready - show loading
+      return <div>Loading Hypha Agent...</div>;
+    }
+  }
 
   const onPromptSelect = (prompt: RenderPompt) => {
     setTimeout(() => {

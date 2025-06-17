@@ -343,10 +343,21 @@ const useHyphaAgent = () => {
           "[useHyphaAgent] Creating new HyphaAgent with external server",
         );
 
+        // url looks like this: http://localhost:3001/#/chat?service_id=ws-user-github|478667/x742s9xc381750092581871:deno-app-engine
+
+        // get from url params or use the default
+        const serviceId =
+          new URLSearchParams(window.location.href.split("?")[1]).get(
+            "service_id",
+          ) || "hypha-agents/deno-app-engine";
         const agent = new HyphaAgentApi(
           "https://hypha.aicell.io",
-          "hypha-agents/deno-app-engine",
+          serviceId,
           () => store.getServer(), // Wrap in arrow function to preserve context
+        );
+
+        console.log(
+          `Connecting to deno-app-engine served at https://hypha.aicell.io, serviceId: ${serviceId}`,
         );
 
         // Only set the agent if we're still initializing (not cancelled)

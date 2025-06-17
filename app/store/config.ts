@@ -124,7 +124,7 @@ export const DEFAULT_CONFIG: ConfigType = {
   hideBuiltinTemplates: false, // dont add builtin masks
 
   sendMemory: true,
-  historyMessageCount: 4,
+  historyMessageCount: 30,
   compressMessageLengthThreshold: 1000,
   enableInjectSystemPrompts: false,
   template: DEFAULT_INPUT_TEMPLATE,
@@ -242,13 +242,14 @@ export const useAppConfig = createPersistStore(
   }),
   {
     name: StoreKey.Config,
-    version: 0.65,
+    version: 0.66,
     migrate: (persistedState, version) => {
-      if (version < 0.65) {
+      if (version < 0.66) {
         return {
           ...DEFAULT_CONFIG,
           ...(persistedState as any),
           models: DEFAULT_MODELS as any as ModelRecord[],
+          historyMessageCount: 30, // Force update to new default
         };
       }
       return persistedState;

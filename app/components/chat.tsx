@@ -991,22 +991,16 @@ function _Chat() {
           return;
         }
 
-        // List existing agents to see if one already exists with this ID
-        console.log("[Chat] Checking existing agents...");
-        const existingAgents = await hyphaAgent.listAgents();
-        console.log("[Chat] Checking existing agents:", existingAgents);
+        // Check if agent already exists with this ID
+        console.log("[Chat] Checking if agent exists...", agentId);
+        const agentExistsResult = await hyphaAgent.agentExists({
+          agentId: agentId,
+        });
+        console.log("[Chat] Agent exists:", agentExistsResult.exists);
 
-        // Look for exact match first
-        let existingAgent = existingAgents.find((agent) =>
-          agent.id.endsWith(agentId),
-        );
-
-        if (existingAgent) {
-          console.log(
-            "[Chat] Found existing exact match agent:",
-            existingAgent.id,
-          );
-          hyphaAgent.setAgentId(existingAgent.id);
+        if (agentExistsResult.exists) {
+          console.log("[Chat] Found existing agent:", agentId);
+          hyphaAgent.setAgentId(agentId);
           createdAgentsRef.current[agentId] = true;
           if (!cancelled) setIsAgentReady(true);
           return;
@@ -1084,9 +1078,10 @@ function _Chat() {
 
         // Verify the agent is still alive and working
         try {
-          const checkAgents = await hyphaAgent.listAgents();
-          const stillExists = checkAgents.find((a) => a.id === newAgent.id);
-          if (!stillExists) {
+          const agentStatusResult = await hyphaAgent.agentExists({
+            agentId: newAgent.id,
+          });
+          if (!agentStatusResult.exists) {
             throw new Error(
               "Agent disappeared after creation, likely due to startup script failure",
             );
@@ -1778,19 +1773,16 @@ function _Chat() {
 
                               // Destroy existing agent on server for clean slate
                               try {
-                                const existingAgents =
-                                  await hyphaAgent.listAgents();
-                                const existingAgent = existingAgents.find((a) =>
-                                  a.id.endsWith(agentId),
-                                );
-                                if (existingAgent) {
+                                const agentExistsResult =
+                                  await hyphaAgent.agentExists({
+                                    agentId: agentId,
+                                  });
+                                if (agentExistsResult.exists) {
                                   console.log(
                                     "[Chat] Destroying existing agent for retry:",
-                                    existingAgent.id,
+                                    agentId,
                                   );
-                                  await hyphaAgent.destroyAgent(
-                                    existingAgent.id,
-                                  );
+                                  await hyphaAgent.destroyAgent(agentId);
                                 }
                               } catch (error) {
                                 console.warn(

@@ -106,6 +106,348 @@ const convertScriptTagsToMarkdown = (content: string): string => {
   return processedContent;
 };
 
+/**
+ * Configuration options for smooth streaming
+ */
+interface StreamingConfig {
+  enabled: boolean;
+  baseSpeed: number; // Characters per second
+  adaptiveSpeed: boolean;
+  smoothness: "low" | "medium" | "high";
+  instantMessages: string[]; // Message types to display instantly
+}
+
+/**
+ * Default streaming configuration
+ */
+const DEFAULT_STREAMING_CONFIG: StreamingConfig = {
+  enabled: true,
+  baseSpeed: 35,
+  adaptiveSpeed: true,
+  smoothness: "high",
+  instantMessages: ["function_call", "function_call_output", "error", "system"],
+};
+
+/**
+ * Advanced streaming utilities for smooth text rendering
+ */
+class StreamingUtils {
+  private static config: StreamingConfig = { ...DEFAULT_STREAMING_CONFIG };
+
+  /**
+   * Update streaming configuration
+   */
+  static configure(config: Partial<StreamingConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
+   * Get current configuration
+   */
+  static getConfig(): StreamingConfig {
+    return { ...this.config };
+  }
+
+  /**
+   * Check if streaming is enabled
+   */
+  static isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
+  /**
+   * Calculate adaptive speed based on content context
+   */
+  static calculateSpeed(content: string, position: number): number {
+    if (!this.config.adaptiveSpeed) {
+      return this.config.baseSpeed;
+    }
+
+    const remainingContent = content.substring(position);
+    const contextBefore = content.substring(
+      Math.max(0, position - 50),
+      position,
+    );
+
+    // Code blocks - slower for readability
+    if (this.isInCodeBlock(content, position)) {
+      return this.config.baseSpeed * 0.4;
+    }
+
+    // Function calls or system messages - faster
+    if (remainingContent.match(/^🚀|^✅|^📤|^🔄/)) {
+      return this.config.baseSpeed * 1.8;
+    }
+
+    // Whitespace - much faster
+    if (/^\s+/.test(remainingContent)) {
+      return this.config.baseSpeed * 3;
+    }
+
+    // Punctuation - slightly faster
+    if (/^[.,!?;:]/.test(remainingContent)) {
+      return this.config.baseSpeed * 1.5;
+    }
+
+    // Markdown formatting - faster
+    if (/^[*_`#\-\[\]()]/.test(remainingContent)) {
+      return this.config.baseSpeed * 2;
+    }
+
+    // Regular text - base speed with slight randomization for naturalness
+    const randomFactor = 0.8 + Math.random() * 0.4; // 0.8-1.2 multiplier
+    return this.config.baseSpeed * randomFactor;
+  }
+
+  /**
+   * Check if position is within a code block
+   */
+  private static isInCodeBlock(content: string, position: number): boolean {
+    const beforePosition = content.substring(0, position);
+    const codeBlockMatches = beforePosition.match(/```/g);
+    return codeBlockMatches ? codeBlockMatches.length % 2 === 1 : false;
+  }
+
+  /**
+   * Get frame rate based on smoothness setting
+   */
+  static getFrameInterval(): number {
+    switch (this.config.smoothness) {
+      case "low":
+        return 100; // ~10 FPS
+      case "medium":
+        return 50; // ~20 FPS
+      case "high":
+        return 16; // ~60 FPS
+      default:
+        return 16;
+    }
+  }
+}
+
+/**
+ * Enhanced streaming buffer with advanced smoothing and adaptive capabilities
+ */
+class SmoothStreamingBuffer {
+  private targetContent = "";
+  private displayedContent = "";
+  private isStreaming = false;
+  private isCompleted = false;
+  private streamingRaf: number | null = null;
+  private lastUpdateTime = 0;
+  private pendingUpdates: string[] = [];
+  private onUpdate: (content: string) => void;
+  private generationPattern: "steady" | "burst" | "slow" = "steady";
+  private chunkTimings: number[] = [];
+
+  constructor(onUpdate: (content: string) => void) {
+    this.onUpdate = onUpdate;
+  }
+
+  /**
+   * Add content with generation pattern detection
+   */
+  addContent(newContent: string): void {
+    // Skip streaming if disabled
+    if (!StreamingUtils.isEnabled()) {
+      this.targetContent = newContent;
+      this.displayedContent = newContent;
+      this.onUpdate(this.displayedContent);
+      return;
+    }
+
+    this.detectGenerationPattern(newContent);
+    this.targetContent = newContent;
+    this.isCompleted = false;
+
+    if (!this.isStreaming) {
+      this.startSmoothing();
+    }
+  }
+
+  /**
+   * Immediately display content (bypasses streaming)
+   */
+  addImmediateContent(content: string): void {
+    this.stopSmoothing();
+    this.targetContent = content;
+    this.displayedContent = content;
+    this.isCompleted = true;
+    this.onUpdate(this.displayedContent);
+  }
+
+  /**
+   * Replace content and restart streaming
+   */
+  replaceContent(newContent: string): void {
+    this.stopSmoothing();
+    this.targetContent = newContent;
+    this.displayedContent = "";
+    this.isCompleted = false;
+
+    if (StreamingUtils.isEnabled()) {
+      this.startSmoothing();
+    } else {
+      this.displayedContent = newContent;
+      this.onUpdate(this.displayedContent);
+    }
+  }
+
+  /**
+   * Complete streaming and show all remaining content
+   */
+  complete(): void {
+    this.isCompleted = true;
+    if (this.displayedContent !== this.targetContent) {
+      this.displayedContent = this.targetContent;
+      this.onUpdate(this.displayedContent);
+    }
+    this.stopSmoothing();
+  }
+
+  /**
+   * Stop streaming and reset
+   */
+  stop(): void {
+    this.stopSmoothing();
+    this.targetContent = "";
+    this.displayedContent = "";
+    this.isCompleted = false;
+    this.chunkTimings = [];
+  }
+
+  /**
+   * Detect generation patterns to adapt streaming behavior
+   */
+  private detectGenerationPattern(newContent: string): void {
+    const now = Date.now();
+    this.chunkTimings.push(now);
+
+    // Keep only recent timings (last 10 chunks)
+    if (this.chunkTimings.length > 10) {
+      this.chunkTimings = this.chunkTimings.slice(-10);
+    }
+
+    if (this.chunkTimings.length >= 3) {
+      const intervals = [];
+      for (let i = 1; i < this.chunkTimings.length; i++) {
+        intervals.push(this.chunkTimings[i] - this.chunkTimings[i - 1]);
+      }
+
+      const avgInterval =
+        intervals.reduce((a, b) => a + b, 0) / intervals.length;
+      const variance =
+        intervals.reduce(
+          (sum, interval) => sum + Math.pow(interval - avgInterval, 2),
+          0,
+        ) / intervals.length;
+
+      // Classify generation pattern
+      if (avgInterval < 50) {
+        this.generationPattern = "burst";
+      } else if (avgInterval > 200) {
+        this.generationPattern = "slow";
+      } else {
+        this.generationPattern = "steady";
+      }
+    }
+  }
+
+  /**
+   * Start smooth streaming animation
+   */
+  private startSmoothing(): void {
+    if (this.isStreaming) return;
+
+    this.isStreaming = true;
+    this.lastUpdateTime = performance.now();
+
+    const smoothFrame = (currentTime: number) => {
+      if (!this.isStreaming || this.isCompleted) {
+        this.stopSmoothing();
+        return;
+      }
+
+      const deltaTime = (currentTime - this.lastUpdateTime) / 1000;
+      this.lastUpdateTime = currentTime;
+
+      if (this.displayedContent.length < this.targetContent.length) {
+        // Calculate characters to add based on adaptive speed
+        const currentSpeed = this.getAdaptiveSpeed();
+        let charactersToAdd = Math.max(1, Math.floor(currentSpeed * deltaTime));
+
+        // Adjust for generation pattern
+        charactersToAdd = this.adjustForGenerationPattern(charactersToAdd);
+
+        const nextLength = Math.min(
+          this.displayedContent.length + charactersToAdd,
+          this.targetContent.length,
+        );
+
+        this.displayedContent = this.targetContent.substring(0, nextLength);
+        this.onUpdate(this.displayedContent);
+
+        // Continue animation
+        this.streamingRaf = requestAnimationFrame(smoothFrame);
+      } else {
+        this.isStreaming = false;
+      }
+    };
+
+    this.streamingRaf = requestAnimationFrame(smoothFrame);
+  }
+
+  /**
+   * Stop streaming animation
+   */
+  private stopSmoothing(): void {
+    this.isStreaming = false;
+    if (this.streamingRaf) {
+      cancelAnimationFrame(this.streamingRaf);
+      this.streamingRaf = null;
+    }
+  }
+
+  /**
+   * Get adaptive speed based on content and context
+   */
+  private getAdaptiveSpeed(): number {
+    const position = this.displayedContent.length;
+    return StreamingUtils.calculateSpeed(this.targetContent, position);
+  }
+
+  /**
+   * Adjust characters per frame based on detected generation pattern
+   */
+  private adjustForGenerationPattern(baseChars: number): number {
+    switch (this.generationPattern) {
+      case "burst":
+        // Slower display to smooth out bursts
+        return Math.max(1, Math.floor(baseChars * 0.7));
+      case "slow":
+        // Faster display to maintain engagement
+        return Math.floor(baseChars * 1.3);
+      case "steady":
+      default:
+        return baseChars;
+    }
+  }
+
+  /**
+   * Check if currently streaming
+   */
+  isCurrentlyStreaming(): boolean {
+    return this.isStreaming;
+  }
+
+  /**
+   * Get current displayed content
+   */
+  getCurrentContent(): string {
+    return this.displayedContent;
+  }
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -141,11 +483,22 @@ export interface ChatResponse {
   completion_id?: string;
 }
 
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content?: string;
+  tool_call_id?: string;
+  tool_calls?: {
+    type: string;
+    name: string;
+    function: any;
+    id: string;
+  }[];
+}
+
 export class HyphaAgentApi implements LLMApi {
   private server: any = null;
   private service: any = null;
   private agentId: string | null = null;
-  private sessionId: string | null = null;
   private abortController: AbortController | null = null;
   private isConnected: boolean = false;
 
@@ -154,6 +507,70 @@ export class HyphaAgentApi implements LLMApi {
     private serviceId: string = "hypha-agents/deno-app-engine",
     private getServerConnection?: () => Promise<any>,
   ) {}
+
+  /**
+   * Configure smooth streaming behavior
+   * @param config Partial streaming configuration
+   * @example
+   * // Disable streaming for testing
+   * hyphaAgent.configureStreaming({ enabled: false });
+   *
+   * // Adjust speed and smoothness
+   * hyphaAgent.configureStreaming({
+   *   baseSpeed: 50,
+   *   smoothness: 'high',
+   *   adaptiveSpeed: true
+   * });
+   */
+  configureStreaming(config: Partial<StreamingConfig>): void {
+    StreamingUtils.configure(config);
+    log.info(
+      "[HyphaAgent] Streaming configuration updated:",
+      StreamingUtils.getConfig(),
+    );
+  }
+
+  /**
+   * Get current streaming configuration
+   */
+  getStreamingConfig(): StreamingConfig {
+    return StreamingUtils.getConfig();
+  }
+
+  /**
+   * Enable or disable smooth streaming
+   */
+  setStreamingEnabled(enabled: boolean): void {
+    this.configureStreaming({ enabled });
+  }
+
+  /**
+   * Determine if content should be displayed immediately or streamed
+   */
+  private shouldUseImmediateDisplay(
+    chunkType: string,
+    content?: string,
+  ): boolean {
+    const config = StreamingUtils.getConfig();
+
+    // Always immediate for instant message types
+    if (config.instantMessages.includes(chunkType)) {
+      return true;
+    }
+
+    // Immediate for system indicators
+    if (
+      content &&
+      (content.includes("🚀 **Executing") ||
+        content.includes("✅ **Execution completed") ||
+        content.includes("📤 Function output") ||
+        content.includes("🔄 New completion"))
+    ) {
+      return true;
+    }
+
+    return false;
+  }
 
   private getSavedToken(): string | null {
     if (typeof window === "undefined") return null;
@@ -294,21 +711,17 @@ export class HyphaAgentApi implements LLMApi {
     try {
       // Check if agent already exists - match the full agent ID from config
       try {
-        const existingAgents = await this.service.listAgents();
-        const existingAgent = existingAgents.find((a: AgentInfo) => {
-          // Extract the agent part after the colon (e.g., "MZazLDPeIBxktE6fcgpRc@productive-martin-touch-upliftingly")
-          const agentPart = a.id.includes(":") ? a.id.split(":").pop() : a.id;
-          // Match the full agent ID from config
-          return agentPart === config.id;
+        const agentExistsResult = await this.service.agentExists({
+          agentId: config.id,
         });
-        if (existingAgent) {
+        if (agentExistsResult.exists) {
           log.info(
             "[HyphaAgent] Found existing agent, but destroying it to ensure clean state:",
-            existingAgent.id,
+            config.id,
           );
           // Always destroy existing agent to avoid reusing potentially broken agents
           try {
-            await this.service.destroyAgent({ agentId: existingAgent.id });
+            await this.service.destroyAgent({ agentId: config.id });
             log.info("[HyphaAgent] Existing agent destroyed successfully");
           } catch (destroyError) {
             log.warn(
@@ -318,8 +731,8 @@ export class HyphaAgentApi implements LLMApi {
             // Continue with creation anyway
           }
         }
-      } catch (listError) {
-        log.warn("[HyphaAgent] Failed to check existing agents:", listError);
+      } catch (existsError) {
+        log.warn("[HyphaAgent] Failed to check if agent exists:", existsError);
         // Don't throw here - continue with creation attempt
       }
 
@@ -447,7 +860,6 @@ export class HyphaAgentApi implements LLMApi {
       await this.service.destroyAgent({ agentId: agentId });
       if (this.agentId === agentId) {
         this.agentId = null;
-        this.sessionId = null;
       }
     } catch (error) {
       log.error("[HyphaAgent] Failed to destroy agent:", error);
@@ -470,6 +882,38 @@ export class HyphaAgentApi implements LLMApi {
     }
   }
 
+  async agentExists(params: { agentId: string }): Promise<{ exists: boolean }> {
+    await this.initialize();
+
+    if (!this.service || !("agentExists" in this.service)) {
+      throw new Error("agentExists method not available in service");
+    }
+
+    try {
+      return await this.service.agentExists(params);
+    } catch (error) {
+      log.error("[HyphaAgent] Failed to check if agent exists:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Convert RequestMessage array to ChatMessage array for stateless chat
+   */
+  private convertToChatMessages(messages: RequestMessage[]): ChatMessage[] {
+    return messages.map((msg) => ({
+      role: msg.role as "system" | "user" | "assistant",
+      content:
+        typeof msg.content === "string"
+          ? msg.content
+          : Array.isArray(msg.content)
+            ? msg.content
+                .map((c) => (c.type === "text" ? c.text : ""))
+                .join(" ")
+            : "",
+    }));
+  }
+
   async chat(options: ChatOptions): Promise<void> {
     if (!this.agentId) {
       options.onError?.(
@@ -480,9 +924,9 @@ export class HyphaAgentApi implements LLMApi {
 
     await this.initialize();
 
-    if (!this.service || !("chatWithAgent" in this.service)) {
+    if (!this.service || !("chatWithAgentStateless" in this.service)) {
       options.onError?.(
-        new Error("chatWithAgent method not available in service"),
+        new Error("chatWithAgentStateless method not available in service"),
       );
       return;
     }
@@ -490,41 +934,23 @@ export class HyphaAgentApi implements LLMApi {
     // Create abort controller for this request
     this.abortController = new AbortController();
 
-    // Generate session ID if not exists
-    if (!this.sessionId) {
-      this.sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    }
-
     /*
-     * STREAMING MARKDOWN RENDERING FIX:
+     * SMOOTH STREAMING IMPLEMENTATION:
      *
-     * This chat method implements a solution to prevent markdown rendering issues
-     * during streaming. The problem occurs when the agent outputs special HTML-like
-     * tags (e.g., <py-script>, <thoughts>) that get partially rendered by the
-     * markdown component before they're complete.
+     * This chat method implements smooth character-by-character streaming using
+     * a StreamingBuffer class. The buffer accumulates chunks as they arrive from
+     * the network and uses requestAnimationFrame to smoothly reveal characters
+     * at a consistent rate, creating a typewriter effect.
      *
-     * Solution approach:
-     * 1. Convert all special tags to standard markdown during streaming
-     * 2. Apply conversion at every content update point to ensure consistency
-     * 3. Handle edge cases like <returnToUser> tag detection and new completion rounds
-     *
-     * Key conversion points:
-     * - text_chunk: Convert before sending to UI
-     * - text: Convert before sending to UI
-     * - new_completion: Convert accumulated content before UI update
-     * - onFinish: Ensure final content is also converted
+     * Key features:
+     * - Adaptive streaming speed based on content type
+     * - Immediate display for function calls and system messages
+     * - Proper handling of markdown conversion during streaming
+     * - Smooth experience even on slow/choppy network connections
      */
 
-    // Convert messages to simple format expected by the agent service
-    const lastMessage = options.messages[options.messages.length - 1];
-    const messageContent =
-      typeof lastMessage.content === "string"
-        ? lastMessage.content
-        : Array.isArray(lastMessage.content)
-          ? lastMessage.content
-              .map((c) => (c.type === "text" ? c.text : ""))
-              .join(" ")
-          : "";
+    // Convert messages to ChatMessage format for stateless chat
+    const chatMessages = this.convertToChatMessages(options.messages);
 
     let accumulatedContent = "";
     let stopReason: ChatCompletionFinishReason | undefined;
@@ -539,8 +965,18 @@ export class HyphaAgentApi implements LLMApi {
       timestamp: number;
     }> = [];
 
+    // Create streaming buffer for smooth character-by-character rendering
+    const streamingBuffer = new SmoothStreamingBuffer((content: string) => {
+      // Call the original onUpdate with the processed content
+      options.onUpdate?.(content, "");
+    });
+
     try {
-      log.info("[HyphaAgent] Starting chat with agent:", this.agentId);
+      log.info(
+        "[HyphaAgent] Starting stateless chat with agent:",
+        this.agentId,
+        chatMessages,
+      );
 
       // Retry logic for agent initialization
       let chatGenerator;
@@ -549,12 +985,16 @@ export class HyphaAgentApi implements LLMApi {
 
       while (retryCount < maxRetries) {
         try {
-          log.debug("chatWithAgent", this.agentId, this.sessionId);
-          // Chat with agent using async generator
-          chatGenerator = await this.service.chatWithAgent({
+          log.debug(
+            "chatWithAgentStateless",
+            this.agentId,
+            chatMessages.length,
+            "messages",
+          );
+          // Chat with agent using async generator - stateless mode
+          chatGenerator = await this.service.chatWithAgentStateless({
             agentId: this.agentId,
-            message: messageContent,
-            sessionId: this.sessionId,
+            messages: chatMessages,
           });
           break; // Success, exit retry loop
         } catch (error: any) {
@@ -609,10 +1049,12 @@ export class HyphaAgentApi implements LLMApi {
       for await (const chunk of chatGenerator) {
         // Check if aborted
         if (this.abortController?.signal.aborted) {
+          streamingBuffer.stop();
           break;
         }
 
         if (chunk.type === "error") {
+          streamingBuffer.stop();
           options.onError?.(
             new Error(chunk.error || "Unknown error from agent"),
           );
@@ -639,28 +1081,21 @@ export class HyphaAgentApi implements LLMApi {
 
               // Clear accumulated content and start fresh with processed content from the tag
               accumulatedContent = contentFromTag;
-              log.info(
-                "[HyphaAgent] <returnToUser> tag detected, clearing previous content",
-              );
-
-              // Send processed content - this ensures no unprocessed script tags are ever shown
-              options.onUpdate?.(
-                processedContentFromTag,
-                processedContentFromTag,
-              );
+              // Use streaming buffer to smoothly display the content from the tag
+              streamingBuffer.replaceContent(processedContentFromTag);
             } else {
               // Fallback: just add the chunk normally
               accumulatedContent += chunkContent;
               const processedContent =
                 convertScriptTagsToMarkdown(accumulatedContent);
-              options.onUpdate?.(processedContent, chunkContent);
+              streamingBuffer.addContent(processedContent);
             }
           } else {
             // Normal chunk processing
             accumulatedContent += chunkContent;
             const processedContent =
               convertScriptTagsToMarkdown(accumulatedContent);
-            options.onUpdate?.(processedContent, chunkContent);
+            streamingBuffer.addContent(processedContent);
           }
         } else if (chunk.type === "text" && chunk.content) {
           // For full text updates, also check for returnToUser tag
@@ -685,24 +1120,21 @@ export class HyphaAgentApi implements LLMApi {
                 "[HyphaAgent] <returnToUser> tag detected in full text, clearing previous content",
               );
 
-              // Send processed content - this ensures no unprocessed script tags are ever shown
-              options.onUpdate?.(
-                processedContentFromTag,
-                processedContentFromTag,
-              );
+              // Use streaming buffer to smoothly display the content from the tag
+              streamingBuffer.replaceContent(processedContentFromTag);
             } else {
               // Fallback: use the full content
               accumulatedContent = textContent;
               const processedContent =
                 convertScriptTagsToMarkdown(accumulatedContent);
-              options.onUpdate?.(processedContent, processedContent);
+              streamingBuffer.addContent(processedContent);
             }
           } else {
             // Normal full text processing
             accumulatedContent = textContent;
             const processedContent =
               convertScriptTagsToMarkdown(accumulatedContent);
-            options.onUpdate?.(processedContent, processedContent);
+            streamingBuffer.addContent(processedContent);
           }
         } else if (chunk.type === "function_call") {
           // Code execution is starting
@@ -716,7 +1148,13 @@ export class HyphaAgentApi implements LLMApi {
           // Convert script tags to markdown before updating
           const processedContent =
             convertScriptTagsToMarkdown(accumulatedContent);
-          options.onUpdate?.(processedContent, executionMessage);
+
+          // Use immediate display for function calls
+          if (this.shouldUseImmediateDisplay(chunk.type, processedContent)) {
+            streamingBuffer.addImmediateContent(processedContent);
+          } else {
+            streamingBuffer.addContent(processedContent);
+          }
 
           // Track function execution
           functionExecutions.push({
@@ -745,7 +1183,7 @@ export class HyphaAgentApi implements LLMApi {
             execution.output = output;
           }
 
-          // Format and display the results immediately
+          // Format and display the results
           let resultMessage = `\n✅ **Execution completed**\n\n`;
 
           if (output) {
@@ -776,7 +1214,13 @@ export class HyphaAgentApi implements LLMApi {
           // Convert script tags to markdown before updating
           const processedContent =
             convertScriptTagsToMarkdown(accumulatedContent);
-          options.onUpdate?.(processedContent, resultMessage);
+
+          // Use immediate display for function output
+          if (this.shouldUseImmediateDisplay(chunk.type, processedContent)) {
+            streamingBuffer.addImmediateContent(processedContent);
+          } else {
+            streamingBuffer.addContent(processedContent);
+          }
 
           // Call the callback if provided
           options.onFunctionOutput?.(chunk.content, chunk.call_id);
@@ -786,11 +1230,10 @@ export class HyphaAgentApi implements LLMApi {
             chunk.content,
           );
         } else if (chunk.type === "new_completion") {
-          // New completion round starting
-          // IMPORTANT: Process the accumulated content before sending to UI to prevent script tag flicker
+          // New completion round starting - handle as streaming content
           const processedContent =
             convertScriptTagsToMarkdown(accumulatedContent);
-          options.onUpdate?.(processedContent, "🤔 Thinking...");
+          streamingBuffer.addContent(processedContent);
 
           // Call the callback if provided
           options.onNewCompletion?.(chunk.completion_id);
@@ -821,11 +1264,14 @@ export class HyphaAgentApi implements LLMApi {
       const processedFinalContent = convertScriptTagsToMarkdown(finalContent);
       const completionTokens = processedFinalContent.length;
 
-      // Check if the final content is different from the last streamed content
-      // to avoid unnecessary re-renders that could cause flickering
-      const lastStreamedContent =
-        convertScriptTagsToMarkdown(accumulatedContent);
-      const contentChanged = processedFinalContent !== lastStreamedContent;
+      // Complete the streaming buffer to ensure all content is displayed
+      if (functionExecutions.length > 0) {
+        // If we have function executions, add the summary to the streaming buffer
+        streamingBuffer.addContent(processedFinalContent);
+      }
+
+      // Complete the streaming to show any remaining content immediately
+      streamingBuffer.complete();
 
       usage = {
         prompt_tokens: promptTokens,
@@ -840,11 +1286,14 @@ export class HyphaAgentApi implements LLMApi {
         },
       };
 
-      // Only call onFinish if content has actually changed or if we need to update metadata
+      // Always call onFinish with the final processed content
       if (processedFinalContent && !this.abortController?.signal.aborted) {
         options.onFinish(processedFinalContent, stopReason, usage);
       }
     } catch (error: any) {
+      // Always stop streaming buffer on error
+      streamingBuffer.stop();
+
       if (
         error?.name === "AbortError" ||
         this.abortController?.signal.aborted
@@ -891,7 +1340,6 @@ export class HyphaAgentApi implements LLMApi {
   // Utility methods
   setAgentId(agentId: string): void {
     this.agentId = agentId;
-    this.sessionId = null; // Reset session when changing agents
   }
 
   getAgentId(): string | null {
@@ -917,7 +1365,6 @@ export class HyphaAgentApi implements LLMApi {
     this.service = null;
     this.isConnected = false;
     this.agentId = null;
-    this.sessionId = null;
   }
 
   // Check if user is authenticated
@@ -953,9 +1400,9 @@ export class HyphaAgentApi implements LLMApi {
       const timestamp = new Date(execution.timestamp).toLocaleTimeString();
 
       summary += `### ${index + 1}. \`${execution.name}\`\n\n`;
-      summary += `- **Call ID:** \`${execution.callId}\`\n`;
-      summary += `- **Time:** ${timestamp}\n`;
-      summary += `- **Status:** ${duration}\n\n`;
+      // summary += `- **Call ID:** \`${execution.callId}\`\n`;
+      // summary += `- **Time:** ${timestamp}\n`;
+      // summary += `- **Status:** ${duration}\n\n`;
 
       if (execution.args && Object.keys(execution.args).length > 0) {
         // Special handling for runCode function

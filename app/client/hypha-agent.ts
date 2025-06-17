@@ -1393,13 +1393,13 @@ export class HyphaAgentApi implements LLMApi {
     if (executions.length === 0) return "";
 
     let summary = "";
-    summary += `<details>\n\n<summary>🔧 Function Executions (${executions.length} ${executions.length === 1 ? "call" : "calls"})</summary>\n\n`;
+    summary += `<details>\n\n<summary>🔧 Tool Use History (${executions.length} ${executions.length === 1 ? "tool call" : "tool calls"})</summary>\n\n`;
 
     executions.forEach((execution, index) => {
       const duration = execution.output ? "✅ completed" : "⏳ in progress";
       const timestamp = new Date(execution.timestamp).toLocaleTimeString();
 
-      summary += `### ${index + 1}. \`${execution.name}\`\n\n`;
+      summary += `### ${index + 1}. \`${execution.name}\` Tool\n\n`;
       // summary += `- **Call ID:** \`${execution.callId}\`\n`;
       // summary += `- **Time:** ${timestamp}\n`;
       // summary += `- **Status:** ${duration}\n\n`;

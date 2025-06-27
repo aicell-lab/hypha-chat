@@ -647,10 +647,10 @@ export class HyphaAgentApi implements LLMApi {
         });
       }
 
-      log.info("[HyphaAgent] Getting service...");
+      log.info("[HyphaAgent] Getting deno-app-engine service...");
       try {
         this.service = await this.server.getService(this.serviceId, {
-          mode: "random",
+          mode: "select:min:getActiveKernelCount",
         });
       } catch (error) {
         // If direct access fails, try to find it in the list of services

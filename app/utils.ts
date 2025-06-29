@@ -302,3 +302,59 @@ export function getQuantization(model_id: string): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * Detect if the device is mobile or has limited memory
+ * to prevent memory-intensive operations that could cause crashes
+ */
+export function isMobileOrLowMemory(): boolean {
+  if (typeof window === "undefined") return false;
+
+  // Check for mobile user agent
+  const isMobile =
+    /iPhone|iPad|iPod|Android|BlackBerry|IEMobile|Opera Mini/i.test(
+      navigator.userAgent,
+    );
+
+  // Check for low memory if available (Chrome/Edge feature)
+  const isLowMemory =
+    (navigator as any).deviceMemory && (navigator as any).deviceMemory < 4; // Less than 4GB
+
+  // Check for reduced motion preference (might indicate performance concerns)
+  const prefersReducedMotion =
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  return isMobile || isLowMemory || prefersReducedMotion;
+}
+
+/**
+ * Get available memory information for diagnostics
+ */
+export function getMemoryInfo(): {
+  deviceMemory?: number;
+  isMobile: boolean;
+  userAgent: string;
+} {
+  if (typeof window === "undefined") {
+    return { isMobile: false, userAgent: "" };
+  }
+
+  return {
+    deviceMemory: (navigator as any).deviceMemory,
+    isMobile: /iPhone|iPad|iPod|Android|BlackBerry|IEMobile|Opera Mini/i.test(
+      navigator.userAgent,
+    ),
+    userAgent: navigator.userAgent,
+  };
+}
+
+/**
+ * Log memory warning for debugging
+ */
+export function logMemoryWarning(feature: string, memoryInfo: any): void {
+  console.warn(
+    `[Memory Warning] ${feature} may cause performance issues on this device:`,
+    memoryInfo,
+  );
+}

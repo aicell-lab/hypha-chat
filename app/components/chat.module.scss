@@ -312,6 +312,12 @@
   padding-bottom: 40px;
   position: relative;
   overscroll-behavior: none;
+  
+  /* Essential scroll performance optimizations */
+  will-change: scroll-position;
+  transform: translateZ(0); /* Force hardware acceleration */
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+  contain: layout style; /* Limit browser reflow calculations during scroll */
 }
 
 .chat-action-context {

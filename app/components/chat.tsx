@@ -776,6 +776,29 @@ function _Chat() {
     return resources.find((r: any) => r.id === agentId) || null;
   }, [config.modelConfig.selectedAgent?.id, resources.length]); // Use resources.length instead of resources array
 
+  // Throttled scroll handler for better performance
+  const onChatBodyScroll = useDebouncedCallback((e: HTMLElement) => {
+    const bottomHeight = e.scrollTop + e.clientHeight;
+    const edgeThreshold = e.clientHeight;
+
+    const isTouchTopEdge = e.scrollTop <= edgeThreshold;
+    const isTouchBottomEdge = bottomHeight >= e.scrollHeight - edgeThreshold;
+    const isHitBottom =
+      bottomHeight >= e.scrollHeight - (isMobileScreen ? 4 : 10);
+
+    const prevPageMsgIndex = msgRenderIndex - CHAT_PAGE_SIZE;
+    const nextPageMsgIndex = msgRenderIndex + CHAT_PAGE_SIZE;
+
+    if (isTouchTopEdge && !isTouchBottomEdge) {
+      setMsgRenderIndex(prevPageMsgIndex);
+    } else if (isTouchBottomEdge) {
+      setMsgRenderIndex(nextPageMsgIndex);
+    }
+
+    setHitBottom(isHitBottom);
+    setAutoScroll(isHitBottom);
+  }, 16); // ~60fps throttling for smooth scroll
+
   // Track agent readiness for Hypha Agent client
   const [isAgentReady, setIsAgentReady] = useState(false);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -1499,28 +1522,6 @@ function _Chat() {
       chatStore.onUserInput(textContent, llm, images);
     }
     inputRef.current?.focus();
-  };
-
-  const onChatBodyScroll = (e: HTMLElement) => {
-    const bottomHeight = e.scrollTop + e.clientHeight;
-    const edgeThreshold = e.clientHeight;
-
-    const isTouchTopEdge = e.scrollTop <= edgeThreshold;
-    const isTouchBottomEdge = bottomHeight >= e.scrollHeight - edgeThreshold;
-    const isHitBottom =
-      bottomHeight >= e.scrollHeight - (isMobileScreen ? 4 : 10);
-
-    const prevPageMsgIndex = msgRenderIndex - CHAT_PAGE_SIZE;
-    const nextPageMsgIndex = msgRenderIndex + CHAT_PAGE_SIZE;
-
-    if (isTouchTopEdge && !isTouchBottomEdge) {
-      setMsgRenderIndex(prevPageMsgIndex);
-    } else if (isTouchBottomEdge) {
-      setMsgRenderIndex(nextPageMsgIndex);
-    }
-
-    setHitBottom(isHitBottom);
-    setAutoScroll(isHitBottom);
   };
   function scrollToBottom() {
     setMsgRenderIndex(renderMessages.length - CHAT_PAGE_SIZE);

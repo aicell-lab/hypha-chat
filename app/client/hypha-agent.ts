@@ -2,8 +2,9 @@
 
 import log from "loglevel";
 import { hyphaWebsocketClient } from "hypha-rpc";
-import { ChatOptions, LLMApi, LLMConfig, RequestMessage } from "./api";
+import { ChatOptions, LLMApi, RequestMessage } from "./api";
 import { ChatCompletionFinishReason, CompletionUsage } from "@mlc-ai/web-llm";
+import { isMobileOrLowMemory } from "../utils";
 
 // Simple authentication error detection
 const isAuthenticationError = (error: any): boolean => {
@@ -121,10 +122,10 @@ interface StreamingConfig {
  * Default streaming configuration
  */
 const DEFAULT_STREAMING_CONFIG: StreamingConfig = {
-  enabled: true,
-  baseSpeed: 35,
+  enabled: true, // Enable smooth streaming for better UX
+  baseSpeed: 45, // Slightly faster for better responsiveness
   adaptiveSpeed: true,
-  smoothness: "high",
+  smoothness: "high", // High smoothness for best experience
   instantMessages: ["function_call", "function_call_output", "error", "system"],
 };
 
@@ -501,12 +502,28 @@ export class HyphaAgentApi implements LLMApi {
   private agentId: string | null = null;
   private abortController: AbortController | null = null;
   private isConnected: boolean = false;
+  private memoryOptimized: boolean = false;
 
   constructor(
     private serverUrl: string = "https://hypha.aicell.io",
     private serviceId: string = "hypha-agents/deno-app-engine",
     private getServerConnection?: () => Promise<any>,
-  ) {}
+  ) {
+    // Optimize for memory-constrained devices but keep streaming enabled
+    this.memoryOptimized = isMobileOrLowMemory();
+    if (this.memoryOptimized) {
+      log.info(
+        "[HyphaAgent] Memory optimization enabled for mobile/low-memory device",
+      );
+
+      // Configure for reduced memory usage but keep streaming smooth
+      this.configureStreaming({
+        enabled: true, // Keep streaming enabled even on mobile
+        baseSpeed: 35, // Slightly slower on mobile
+        smoothness: "medium", // Medium smoothness for mobile
+      });
+    }
+  }
 
   /**
    * Configure smooth streaming behavior
@@ -1507,5 +1524,61 @@ export class HyphaAgentApi implements LLMApi {
 
     summary += "\n</details>\n\n";
     return summary;
+  }
+
+  /**
+   * Stateless chat completion for tasks like summarization
+   * Does not modify agent history or memory
+   * Returns a simple promise that resolves to the final response
+   */
+  async statelessChatCompletion(messages: RequestMessage[]): Promise<string> {
+    if (!this.agentId) {
+      throw new Error(
+        "No agent selected. Please create or select an agent first.",
+      );
+    }
+
+    await this.initialize();
+
+    if (!this.service || !("chatWithAgentStateless" in this.service)) {
+      throw new Error("chatWithAgentStateless method not available in service");
+    }
+
+    // Convert messages to the format expected by the service
+    const chatMessages = this.convertToChatMessages(messages);
+
+    let accumulatedContent = "";
+
+    try {
+      log.info(
+        "[HyphaAgent] Starting stateless chat completion for summarization",
+      );
+
+      // Create the stateless chat generator
+      const chatGenerator = await this.service.chatWithAgentStateless({
+        agentId: this.agentId,
+        messages: chatMessages,
+      });
+
+      for await (const chunk of chatGenerator) {
+        if (chunk.type === "error") {
+          throw new Error(chunk.error || "Unknown error from agent");
+        } else if (chunk.type === "text_chunk" && chunk.content) {
+          accumulatedContent += chunk.content;
+        } else if (chunk.type === "text" && chunk.content) {
+          accumulatedContent = chunk.content;
+        }
+        // Ignore function calls and other chunk types for summarization
+      }
+
+      // Convert script tags to markdown for consistency
+      const processedContent = convertScriptTagsToMarkdown(accumulatedContent);
+
+      log.info("[HyphaAgent] Stateless chat completion finished");
+      return processedContent;
+    } catch (error: any) {
+      log.error("[HyphaAgent] Stateless chat completion error:", error);
+      throw error;
+    }
   }
 }

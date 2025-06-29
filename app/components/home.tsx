@@ -25,10 +25,11 @@ import { ErrorBoundary } from "./error";
 import { getISOLang, getLang } from "../locales";
 import { SideBar } from "./sidebar";
 import { useAppConfig } from "../store/config";
-import { WebLLMApi } from "../client/webllm";
+// import { WebLLMApi } from "../client/webllm";
 import { ModelClient, useChatStore } from "../store";
-import { MLCLLMContext, WebLLMContext, HyphaAgentContext } from "../context";
-import { MlcLLMApi } from "../client/mlcllm";
+// import { MLCLLMContext, WebLLMContext, HyphaAgentContext } from "../context";
+import { HyphaAgentContext } from "../context";
+// import { MlcLLMApi } from "../client/mlcllm";
 import { HyphaAgentApi } from "../client/hypha-agent";
 import { useHyphaStore } from "../store/hypha";
 
@@ -167,149 +168,149 @@ function Screen() {
   );
 }
 
-const useWebLLM = () => {
-  const config = useAppConfig();
-  const [webllm, setWebLLM] = useState<WebLLMApi | undefined>(undefined);
-  const [isWebllmActive, setWebllmAlive] = useState(false);
+// const useWebLLM = () => {
+//   const config = useAppConfig();
+//   const [webllm, setWebLLM] = useState<WebLLMApi | undefined>(undefined);
+//   const [isWebllmActive, setWebllmAlive] = useState(false);
 
-  const isWebllmInitialized = useRef(false);
+//   const isWebllmInitialized = useRef(false);
 
-  // Only initialize WebLLM if we're using the WebLLM client
-  const shouldUseWebLLM = config.modelClientType === ModelClient.WEBLLM;
+//   // Only initialize WebLLM if we're using the WebLLM client
+//   const shouldUseWebLLM = config.modelClientType === ModelClient.WEBLLM;
 
-  // If service worker registration timeout, fall back to web worker
-  const timeout = useRef<NodeJS.Timeout | null>(null);
+//   // If service worker registration timeout, fall back to web worker
+//   const timeout = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    // Clear any existing timeout
-    if (timeout.current) {
-      clearTimeout(timeout.current);
-      timeout.current = null;
-    }
+//   useEffect(() => {
+//     // Clear any existing timeout
+//     if (timeout.current) {
+//       clearTimeout(timeout.current);
+//       timeout.current = null;
+//     }
 
-    // Don't initialize WebLLM for Hypha agents
-    if (!shouldUseWebLLM) {
-      // Clean up existing WebLLM if we switched away from it
-      if (webllm) {
-        setWebLLM(undefined);
-        setWebllmAlive(false);
-        isWebllmInitialized.current = false;
-      }
-      return;
-    }
+//     // Don't initialize WebLLM for Hypha agents
+//     if (!shouldUseWebLLM) {
+//       // Clean up existing WebLLM if we switched away from it
+//       if (webllm) {
+//         setWebLLM(undefined);
+//         setWebllmAlive(false);
+//         isWebllmInitialized.current = false;
+//       }
+//       return;
+//     }
 
-    // Prevent duplicate initialization
-    if (isWebllmInitialized.current || webllm || isWebllmActive) {
-      return;
-    }
+//     // Prevent duplicate initialization
+//     if (isWebllmInitialized.current || webllm || isWebllmActive) {
+//       return;
+//     }
 
-    timeout.current = setTimeout(() => {
-      if (!isWebllmInitialized.current && !isWebllmActive && !webllm) {
-        log.info(
-          "Service Worker activation is timed out. Falling back to use web worker.",
-        );
-        setWebLLM(new WebLLMApi("webWorker", config.logLevel));
-        setWebllmAlive(true);
-      }
-    }, 2_000);
+//     timeout.current = setTimeout(() => {
+//       if (!isWebllmInitialized.current && !isWebllmActive && !webllm) {
+//         log.info(
+//           "Service Worker activation is timed out. Falling back to use web worker.",
+//         );
+//         setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+//         setWebllmAlive(true);
+//       }
+//     }, 2_000);
 
-    // Initialize WebLLM engine
-    if ("serviceWorker" in navigator) {
-      log.info("Service Worker API is available and in use.");
-      navigator.serviceWorker.ready.then(() => {
-        // Double-check before proceeding
-        if (isWebllmInitialized.current || webllm || isWebllmActive) {
-          return;
-        }
+//     // Initialize WebLLM engine
+//     if ("serviceWorker" in navigator) {
+//       log.info("Service Worker API is available and in use.");
+//       navigator.serviceWorker.ready.then(() => {
+//         // Double-check before proceeding
+//         if (isWebllmInitialized.current || webllm || isWebllmActive) {
+//           return;
+//         }
 
-        // Clear timeout since we're proceeding with service worker
-        if (timeout.current) {
-          clearTimeout(timeout.current);
-          timeout.current = null;
-        }
+//         // Clear timeout since we're proceeding with service worker
+//         if (timeout.current) {
+//           clearTimeout(timeout.current);
+//           timeout.current = null;
+//         }
 
-        const webGPUCheckCallback = (event: MessageEvent) => {
-          if (event.data.kind === "return" && isWebllmInitialized.current) {
-            return;
-          }
-          if (event.data.kind === "return" && event.data.success == false) {
-            log.error("WebGPU check failed", event.data.error);
-            navigator.serviceWorker.removeEventListener(
-              "message",
-              webGPUCheckCallback,
-            );
-            setWebLLM(new WebLLMApi("webWorker", config.logLevel));
-            setWebllmAlive(true);
-          } else if (
-            event.data.kind === "return" &&
-            event.data.success == true
-          ) {
-            log.info("WebGPU check success");
-            navigator.serviceWorker.removeEventListener(
-              "message",
-              webGPUCheckCallback,
-            );
-            setWebLLM(new WebLLMApi("serviceWorker", config.logLevel));
-            setWebllmAlive(true);
-          }
-        };
-        navigator.serviceWorker.addEventListener(
-          "message",
-          webGPUCheckCallback,
-        );
-        navigator.serviceWorker.ready.then((registration) => {
-          if (registration.active) {
-            registration.active.postMessage({
-              kind: "webgpu_check",
-            });
-            isWebllmInitialized.current = true;
-          }
-        });
-      });
-    } else {
-      log.info("Service Worker API is not available. Using web worker.");
-      setWebLLM(new WebLLMApi("webWorker", config.logLevel));
-      setWebllmAlive(true);
-    }
+//         const webGPUCheckCallback = (event: MessageEvent) => {
+//           if (event.data.kind === "return" && isWebllmInitialized.current) {
+//             return;
+//           }
+//           if (event.data.kind === "return" && event.data.success == false) {
+//             log.error("WebGPU check failed", event.data.error);
+//             navigator.serviceWorker.removeEventListener(
+//               "message",
+//               webGPUCheckCallback,
+//             );
+//             setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+//             setWebllmAlive(true);
+//           } else if (
+//             event.data.kind === "return" &&
+//             event.data.success == true
+//           ) {
+//             log.info("WebGPU check success");
+//             navigator.serviceWorker.removeEventListener(
+//               "message",
+//               webGPUCheckCallback,
+//             );
+//             setWebLLM(new WebLLMApi("serviceWorker", config.logLevel));
+//             setWebllmAlive(true);
+//           }
+//         };
+//         navigator.serviceWorker.addEventListener(
+//           "message",
+//           webGPUCheckCallback,
+//         );
+//         navigator.serviceWorker.ready.then((registration) => {
+//           if (registration.active) {
+//             registration.active.postMessage({
+//               kind: "webgpu_check",
+//             });
+//             isWebllmInitialized.current = true;
+//           }
+//         });
+//       });
+//     } else {
+//       log.info("Service Worker API is not available. Using web worker.");
+//       setWebLLM(new WebLLMApi("webWorker", config.logLevel));
+//       setWebllmAlive(true);
+//     }
 
-    // Cleanup function
-    return () => {
-      if (timeout.current) {
-        clearTimeout(timeout.current);
-        timeout.current = null;
-      }
-    };
-  }, [shouldUseWebLLM, config.logLevel]); // Add shouldUseWebLLM as dependency
+//     // Cleanup function
+//     return () => {
+//       if (timeout.current) {
+//         clearTimeout(timeout.current);
+//         timeout.current = null;
+//       }
+//     };
+//   }, [shouldUseWebLLM, config.logLevel]); // Add shouldUseWebLLM as dependency
 
-  return {
-    webllm: shouldUseWebLLM ? webllm : undefined,
-    isWebllmActive: shouldUseWebLLM ? isWebllmActive : false,
-  };
-};
+//   return {
+//     webllm: shouldUseWebLLM ? webllm : undefined,
+//     isWebllmActive: shouldUseWebLLM ? isWebllmActive : false,
+//   };
+// };
 
-const useMlcLLM = () => {
-  const config = useAppConfig();
-  const [mlcllm, setMlcLLM] = useState<MlcLLMApi | undefined>(undefined);
+// const useMlcLLM = () => {
+//   const config = useAppConfig();
+//   const [mlcllm, setMlcLLM] = useState<MlcLLMApi | undefined>(undefined);
 
-  // Only initialize MLCLLM if we're using the MLCLLM client
-  const shouldUseMlcLLM = config.modelClientType === ModelClient.MLCLLM_API;
+//   // Only initialize MLCLLM if we're using the MLCLLM client
+//   const shouldUseMlcLLM = config.modelClientType === ModelClient.MLCLLM_API;
 
-  useEffect(() => {
-    if (!shouldUseMlcLLM) {
-      // Clean up existing MLCLLM if we switched away from it
-      if (mlcllm) {
-        setMlcLLM(undefined);
-      }
-      return;
-    }
+//   useEffect(() => {
+//     if (!shouldUseMlcLLM) {
+//       // Clean up existing MLCLLM if we switched away from it
+//       if (mlcllm) {
+//         setMlcLLM(undefined);
+//       }
+//       return;
+//     }
 
-    if (!mlcllm) {
-      setMlcLLM(new MlcLLMApi(config.modelConfig.mlc_endpoint));
-    }
-  }, [shouldUseMlcLLM, mlcllm]);
+//     if (!mlcllm) {
+//       setMlcLLM(new MlcLLMApi(config.modelConfig.mlc_endpoint));
+//     }
+//   }, [shouldUseMlcLLM, mlcllm]);
 
-  return shouldUseMlcLLM ? mlcllm : undefined;
-};
+//   return shouldUseMlcLLM ? mlcllm : undefined;
+// };
 
 const useHyphaAgent = () => {
   const [hyphaAgent, setHyphaAgent] = useState<HyphaAgentApi | undefined>(
@@ -469,33 +470,33 @@ const useStopStreamingMessages = () => {
   }, []);
 };
 
-const useLogLevel = (webllm?: WebLLMApi) => {
-  const config = useAppConfig();
+// const useLogLevel = (webllm?: WebLLMApi) => {
+//   const config = useAppConfig();
 
-  // Update log level once app config loads
-  useEffect(() => {
-    log.setLevel(config.logLevel);
-    if (webllm?.webllm?.engine) {
-      webllm.webllm.engine.setLogLevel(config.logLevel);
-    }
-  }, [config.logLevel, webllm?.webllm?.engine]);
-};
+//   // Update log level once app config loads
+//   useEffect(() => {
+//     log.setLevel(config.logLevel);
+//     if (webllm?.webllm?.engine) {
+//       webllm.webllm.engine.setLogLevel(config.logLevel);
+//     }
+//   }, [config.logLevel, webllm?.webllm?.engine]);
+// };
 
-const useModels = (mlcllm: MlcLLMApi | undefined) => {
-  const config = useAppConfig();
+// const useModels = (mlcllm: MlcLLMApi | undefined) => {
+//   const config = useAppConfig();
 
-  useEffect(() => {
-    if (config.modelClientType == ModelClient.WEBLLM) {
-      config.setModels(DEFAULT_MODELS);
-    } else if (config.modelClientType == ModelClient.MLCLLM_API) {
-      if (mlcllm) {
-        mlcllm.models().then((models) => {
-          config.setModels(models);
-        });
-      }
-    }
-  }, [config.modelClientType, mlcllm]);
-};
+//   useEffect(() => {
+//     if (config.modelClientType == ModelClient.WEBLLM) {
+//       config.setModels(DEFAULT_MODELS);
+//     } else if (config.modelClientType == ModelClient.MLCLLM_API) {
+//       if (mlcllm) {
+//         mlcllm.models().then((models) => {
+//           config.setModels(models);
+//         });
+//       }
+//     }
+//   }, [config.modelClientType, mlcllm]);
+// };
 
 const useInitializeHypha = () => {
   const { initialize } = useHyphaStore();
@@ -516,19 +517,17 @@ const useInitializeHypha = () => {
 
 export function Home() {
   const hasHydrated = useHasHydrated();
-  const { webllm, isWebllmActive } = useWebLLM();
-  const mlcllm = useMlcLLM();
+  // const { webllm, isWebllmActive } = useWebLLM();
+  // const mlcllm = useMlcLLM();
   const hyphaAgent = useHyphaAgent();
   const config = useAppConfig(); // Move this hook call to the top
-  const { user, isConnected } = useHyphaStore();
-  const store = useHyphaStore();
 
   useSwitchTheme();
   useHtmlLang();
   useLoadUrlParam();
   useStopStreamingMessages();
-  useModels(mlcllm);
-  useLogLevel(webllm);
+  // useModels(mlcllm);
+  // useLogLevel(webllm);
   useInitializeHypha();
 
   if (!hasHydrated) {
@@ -562,25 +561,26 @@ export function Home() {
     // Users can interact with the chat and log in as needed
   } else {
     // For other client types, we need WebLLM
-    if (!webllm || !isWebllmActive) {
-      return <Loading />;
-    }
+    // if (!webllm || !isWebllmActive) {
+    //   return <Loading />;
+    // }
 
-    if (!isWebllmActive) {
-      return <ErrorScreen message={Locale.ServiceWorker.Error} />;
-    }
+    // if (!isWebllmActive) {
+    //   return <ErrorScreen message={Locale.ServiceWorker.Error} />;
+    // }
+    return <ErrorScreen message={Locale.ServiceWorker.Error} />;
   }
 
   return (
     <ErrorBoundary>
       <Router>
-        <WebLLMContext.Provider value={webllm}>
-          <MLCLLMContext.Provider value={mlcllm}>
-            <HyphaAgentContext.Provider value={hyphaAgent}>
-              <Screen />
-            </HyphaAgentContext.Provider>
-          </MLCLLMContext.Provider>
-        </WebLLMContext.Provider>
+        {/* <WebLLMContext.Provider value={webllm}>
+          <MLCLLMContext.Provider value={mlcllm}> */}
+        <HyphaAgentContext.Provider value={hyphaAgent}>
+          <Screen />
+        </HyphaAgentContext.Provider>
+        {/* </MLCLLMContext.Provider>
+        </WebLLMContext.Provider> */}
       </Router>
     </ErrorBoundary>
   );

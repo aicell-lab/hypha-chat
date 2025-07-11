@@ -750,17 +750,14 @@ export class HyphaAgentApi implements LLMApi {
 
     // Get default project ID from hypha store
     let projectId = "";
-    let projectAlias = "";
     try {
       const hyphaStore = useHyphaStore.getState();
       if (hyphaStore.defaultProject) {
         projectId = hyphaStore.defaultProject;
-        projectAlias = projectId.split("/").pop() || projectId;
       } else {
         // Initialize default project if not available
         await hyphaStore.initializeDefaultProject();
         projectId = hyphaStore.defaultProject || "";
-        projectAlias = projectId.split("/").pop() || projectId;
       }
     } catch (error) {
       log.warn("[HyphaAgent] Failed to get default project ID:", error);
@@ -787,7 +784,6 @@ os.environ['HYPHA_WORKSPACE'] = '${workspace}'
 os.environ['HYPHA_TOKEN'] = '${token}'
 os.environ['HYPHA_USER_ID'] = '${userId}'
 os.environ['HYPHA_PROJECT_ID'] = '${projectId}'
-os.environ['HYPHA_PROJECT_ALIAS'] = '${projectAlias}'
 print("Environment variables set successfully.")
 `;
 

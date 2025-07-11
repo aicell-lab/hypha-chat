@@ -5,6 +5,7 @@ import { hyphaWebsocketClient } from "hypha-rpc";
 import { ChatOptions, LLMApi, RequestMessage } from "./api";
 import { ChatCompletionFinishReason, CompletionUsage } from "@mlc-ai/web-llm";
 import { isMobileOrLowMemory } from "../utils";
+import { useHyphaStore } from "../store/hypha";
 
 // Simple authentication error detection
 const isAuthenticationError = (error: any): boolean => {
@@ -746,6 +747,26 @@ export class HyphaAgentApi implements LLMApi {
     const currentUrl =
       typeof window !== "undefined" ? window.location.href : "";
     const svcId = this.apiService.id;
+
+    // Get default project ID from hypha store
+    let projectId = "";
+    let projectAlias = "";
+    try {
+      const hyphaStore = useHyphaStore.getState();
+      if (hyphaStore.defaultProject) {
+        projectId = hyphaStore.defaultProject;
+        projectAlias = projectId.split("/").pop() || projectId;
+      } else {
+        // Initialize default project if not available
+        await hyphaStore.initializeDefaultProject();
+        projectId = hyphaStore.defaultProject || "";
+        projectAlias = projectId.split("/").pop() || projectId;
+      }
+    } catch (error) {
+      log.warn("[HyphaAgent] Failed to get default project ID:", error);
+      // Continue without project ID
+    }
+
     const setupScript = `# Hypha Environment Setup
 import micropip
 await micropip.install(['numpy', 'nbformat', 'pandas', 'matplotlib', 'plotly', 'hypha-rpc', 'pyodide-http'])
@@ -765,6 +786,8 @@ os.environ['HYPHA_SERVER_URL'] = '${serverUrl}'
 os.environ['HYPHA_WORKSPACE'] = '${workspace}'
 os.environ['HYPHA_TOKEN'] = '${token}'
 os.environ['HYPHA_USER_ID'] = '${userId}'
+os.environ['HYPHA_PROJECT_ID'] = '${projectId}'
+os.environ['HYPHA_PROJECT_ALIAS'] = '${projectAlias}'
 print("Environment variables set successfully.")
 `;
 

@@ -503,6 +503,7 @@ export class HyphaAgentApi implements LLMApi {
   private abortController: AbortController | null = null;
   private isConnected: boolean = false;
   private memoryOptimized: boolean = false;
+  private apiService: any = null;
 
   constructor(
     private serverUrl: string = "https://hypha.aicell.io",
@@ -612,6 +613,16 @@ export class HyphaAgentApi implements LLMApi {
 
         try {
           this.server = await this.getServerConnection();
+          this.apiService = await this.server.registerService({
+            id: "default-api-service-" + Date.now(),
+            name: "Default API Service",
+            alert: () => {
+              console.log("Alert");
+            },
+            showMessage: () => {
+              console.log("Show Message");
+            },
+          });
           log.info(
             "[HyphaAgent] Server connection obtained:",
             typeof this.server,
@@ -718,12 +729,55 @@ export class HyphaAgentApi implements LLMApi {
     }
   }
 
+  /**
+   * Generate environment setup script for Python agents
+   */
+  private async generateEnvironmentSetupScript(): Promise<string> {
+    // Generate a token for the agent
+    const token = await this.server.generateToken();
+
+    // Get server info
+    const config = this.server.config || {};
+    const serverUrl = config.public_base_url || this.serverUrl;
+    const workspace = config.workspace;
+    const userId = config.user?.id;
+
+    // Get current URL if available
+    const currentUrl =
+      typeof window !== "undefined" ? window.location.href : "";
+    const svcId = this.apiService.id;
+    const setupScript = `# Hypha Environment Setup
+import micropip
+await micropip.install(['numpy', 'nbformat', 'pandas', 'matplotlib', 'plotly', 'hypha-rpc', 'pyodide-http'])
+import pyodide_http
+pyodide_http.patch_all()
+%matplotlib inline
+
+from hypha_rpc import connect_to_server
+server = await connect_to_server(server_url="${serverUrl}", token="${token}")
+api = await server.get_service("${svcId}")
+print("Hypha Core service connected in kernel.")
+
+# Set environment variables
+import os
+os.environ['CURRENT_URL'] = '${currentUrl}'
+os.environ['HYPHA_SERVER_URL'] = '${serverUrl}'
+os.environ['HYPHA_WORKSPACE'] = '${workspace}'
+os.environ['HYPHA_TOKEN'] = '${token}'
+os.environ['HYPHA_USER_ID'] = '${userId}'
+print("Environment variables set successfully.")
+`;
+
+    return setupScript;
+  }
+
   async createAgent(config: AgentConfig): Promise<AgentInfo> {
     await this.initialize();
 
     if (!this.service || !("createAgent" in this.service)) {
       throw new Error("createAgent method not available in service");
     }
+    console.log("Creating agent...");
 
     try {
       // Check if agent already exists - match the full agent ID from config
@@ -753,10 +807,48 @@ export class HyphaAgentApi implements LLMApi {
         // Don't throw here - continue with creation attempt
       }
 
-      log.info("[HyphaAgent] Creating new agent:", config.id);
-      log.debug("[HyphaAgent] Agent config:", config);
+      // Prepare agent configuration with environment setup
+      const modifiedConfig = { ...config };
 
-      const agent = await this.service.createAgent(config);
+      // Only inject environment setup for Python agents
+      if (!config.kernelType || config.kernelType === "PYTHON") {
+        log.info(
+          "[HyphaAgent] Injecting environment setup script for Python agent",
+        );
+
+        try {
+          const environmentSetupScript =
+            await this.generateEnvironmentSetupScript();
+
+          if (config.startupScript) {
+            // If there's already a startup script, prepend the environment setup
+            modifiedConfig.startupScript =
+              environmentSetupScript + "\n\n" + config.startupScript;
+            log.info(
+              "[HyphaAgent] Prepended environment setup to existing startup script",
+            );
+          } else {
+            // If no startup script exists, use the environment setup script
+            modifiedConfig.startupScript = environmentSetupScript;
+            log.info("[HyphaAgent] Set environment setup as startup script");
+          }
+        } catch (error) {
+          log.warn(
+            "[HyphaAgent] Failed to generate environment setup, proceeding without it:",
+            error,
+          );
+        }
+      } else {
+        log.info(
+          "[HyphaAgent] Skipping environment setup injection for non-Python agent:",
+          config.kernelType,
+        );
+      }
+
+      log.info("[HyphaAgent] Creating new agent:", config.id);
+      log.debug("[HyphaAgent] Agent config:", modifiedConfig);
+
+      const agent = await this.service.createAgent(modifiedConfig);
       this.agentId = agent.id;
       log.info("[HyphaAgent] Agent created successfully:", agent.id);
 

@@ -555,8 +555,6 @@ const FileUploadAction = memo(function FileUploadAction() {
   );
 });
 
-const INITIALIZATION_SCRIPT = ``;
-
 function useScrollToBottom(
   scrollRef: RefObject<HTMLDivElement>,
   detach: boolean = false,
@@ -1049,9 +1047,7 @@ function _Chat() {
               kernelType: "PYTHON",
               autoAttachKernel: true,
               startupScript:
-                INITIALIZATION_SCRIPT +
-                "\n" +
-                (selectedAgentResource.manifest?.startup_script || ""),
+                selectedAgentResource.manifest?.startup_script || "",
               enablePlanning: true,
               maxSteps: 10,
             };
@@ -1067,7 +1063,6 @@ function _Chat() {
               instructions: "You are a helpful AI assistant.",
               kernelType: "PYTHON",
               autoAttachKernel: true,
-              startupScript: INITIALIZATION_SCRIPT,
               enablePlanning: true,
               maxSteps: 10,
             };
@@ -1080,7 +1075,6 @@ function _Chat() {
             instructions: "You are a helpful AI assistant.",
             kernelType: "PYTHON",
             autoAttachKernel: true,
-            startupScript: INITIALIZATION_SCRIPT,
           };
         }
 
